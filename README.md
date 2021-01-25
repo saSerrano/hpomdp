@@ -19,6 +19,6 @@ To run a demo of the three methods evaluated in the article (FP, TLP and HP), pe
 - cd ../bin
 - bash run_demo.sh
 
-## Run demo
+## EIR-2021 demo
 
 To run the EIR-2021 demo, switch to the eir2021 branch.

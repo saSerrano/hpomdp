@@ -13,9 +13,5 @@ The following repositories must be installed:
 
 ## Run demo
 
-To run a demo of the three methods evaluated in the article (FP, TLP and HP), perform the following steps:
-- In the CMakeLists.txt file, in lines 55, 56, 74, 75, 76 and 81 edit the paths to your installation of the requirements of this repository.
-- cd build; cmake ..; make
-- cd ../bin
-- bash run_demo.sh
+To run the EIR-2021 demo, perform the steps as indicated in the EIR-2021-INSTRUCTIONS.txt file.
 

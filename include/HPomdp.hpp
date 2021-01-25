@@ -139,13 +139,8 @@ class HPomdp
 		string ws_state;
 		int ca_count_;// Concrete actions counter
 
-		//Keep record of a full hierarchical trace
-		int top_lvl_;// upper-most level at which actions are executed
-		vector<vector<string> > trace_a;
-		vector<vector<string> > trace_z;
-		vector<vector<vector<double> > > trace_b;
-		vector<vector<vector<string> > > trace_is;
-		vector<string> trace_s;
+		//Keep record of a full hierarchical execution
+		json xrec_;
 
 		//World simulator model
 		vector<pMat> ws_T;
@@ -487,6 +482,105 @@ class HPomdp
 		 * \return Returns true if the input arguments are valid to execute the experiments, otherwise, false.
 		*/
 		bool run(int argc,char** argv);
+
+		//Methods for the EIR-2021 demo --------------------------------------
+
+		/**
+		 * \brief This method is for generating a navigation environment and run a single execution of the HP planner that is presented in the article "Knowledge-Based Hierarchical POMDPs for Task Planning". Also, the execution will be recorded in a JSON file (execution_history.json) and displayed.
+		 * \param argc Amount of input arguments.
+		 * \param argv Array of input arguments.
+		 * \return Returns true if the input arguments are valid to execute the HP planner, otherwise, false.
+		*/
+		bool run_eir(int argc,char** argv);
+
+		/**
+		 * \brief This method saves the latest execution of the HP planner. After the hPolPlan and hPolExec have been executed, then this method can be invoked to save the execution history in a JSON file.
+		 * \param work_dir Directory where the JSON file will be stored.
+		 * \return Returns true if the execution file was successfully saved, otherwise, false.
+		*/
+		bool saveExecutionHistory(string const &work_dir);
+
+		/**
+		 * \brief This method renders an execution history JSON file. The displayed animation can be paused/played with the space bar key.
+		 * \param work_dir Directory from which the execution history JSON file will be loaded. The directory "work_dir" must contain the following files: execution_history.json, cell_coord.json and env.json.
+		 * \return Returns true if the execution file was successfully rendered, otherwise, false.
+		*/
+		bool renderExecutionHistory(string const &work_dir);
+
+		/**
+		 * \brief This method draws vertically text in a Mat image.
+		 * \param img Image in which the text will be written.
+		 * \param text Text to write into the image.
+		 * \param ori Bottom-left corner of the vertical text string in the image.
+		 * \param color Color for the text.
+		*/
+		void vText(Mat &img, string text, cv::Point ori, Scalar color);
+
+		/**
+		 * \brief This method draws a vertical green rectangle, with a fixed withd of 40 pixels, to represent a probability value (p), where for a probability of 1.0 the rectangle has the max-height of 200 pixels.
+		 * \param img Image in which the probability bar will be drawn.
+		 * \param p Probability value that determines the height of the probability bar, where 0 <= p <= 1.
+		 * \param ori Bottom-left corner of the probability bar in the image.
+		*/
+		void pBar(Mat &img, float p, cv::Point ori);
+
+		/**
+		 * \brief This method draws a probability distribution corresponding to the elements in dist.
+		 * \param img Image in which the probability distribution will be drawn.
+		 * \param dist Map object holding the name ofthe elements in the distribution, and their probability value.
+		 * \param ori Bottom-left corner of the probability distribution in the image.
+		*/
+		void pDist(Mat &img, map<string,float> &dist, cv::Point ori);
+
+		/**
+		 * \brief This method colors the area corresponding to a state in a navigation environment. The state can be concrete (cell) or abstract (section, room or building).
+		 * \param img Image in which the state will be drawn.
+		 * \param s Name of teh state to be drawn.
+		 * \param data JSON object containing the coordinates of every state within the navigation environment image.
+		 * \param hs TreeHandle object containing the hierarchy of states.
+		 * \param draw_id Value indicating if the state's name should be written in addition to coloring the state.
+		 * \param cc Vector containing at least as many colors as the amount of levels in hs.
+		*/
+		void colorState(Mat &img, string &s, json &data, TreeHandle &hs, bool draw_id, vector<Scalar> &cc);
+
+		/**
+		 * \brief This method renders the execution of a (concrete/abstract) aaction as a sequence of images.
+		 * \param img Image before the animation takes place.
+		 * \param a Name of the action that will be animated.
+		 * \param data JSON object containing the coordinates of every state within the navigation environment image.
+		 * \param lvl_offset Bottom-left corner of the section that corresponds to the level in the hierarchy at which action "a" belongs.
+		 * \param s0 If "a" is concrete, s0 is the name of the cell the robot is located at the moment "a" is executed.
+		 * \return Returns the sequence of image that correspond to the animation of action "a".
+		*/
+		std::vector<cv::Mat> animAction(Mat const &img, string a, json &data, cv::Point lvl_offset, string s0 = string(""));
+
+		/**
+		 * \brief This method draws the state space of a local policy (LP) and its goal state.
+		 * \param img Image in which the LP's state space will be drawn.
+		 * \param ss Vector containing the names of the states that constitute the LP's state space.
+		 * \param gs Name of the goal state.
+		 * \param data JSON object containing the coordinates of every state within the navigation environment image.
+		 * \param lvl_offset Bottom-left corner of the section that corresponds to the level in the hierarchy at which the LP belongs.
+		*/
+		void animLP(Mat &img, vector<string> ss, string gs, json &data, cv::Point lvl_offset);
+
+		/**
+		 * \brief This method takes in the original navigation environment image and generates a template in which an execution history can be rendered.
+		 * \param img Original navigation environment image.
+		 * \param offset Vector containing the bottom-left corner of the sections in which the belief state of each level in the hierarchy will be drawn during the animation of the execution history.
+		 * \param img_width Width (in pixels) the template  image must have.
+		 * \return Returns the template image for the rendering of an exectuion history.
+		*/
+		Mat renderTemp(Mat const &img, vector<cv::Point> const &offset, int img_width);
+
+		/**
+		 * \brief This method draws the current concrete state of the robot, or an observation it perceived.
+		 * \param img Iage in which the state/observation will be drawn.
+		 * \param sz Name of the state/observation to be drawn in img.
+		 * \param is_s Value indicating whether sz is a state, otherwise, sz is considered to be an observation.
+		 * \param data JSON object containing the coordinates of every state within the navigation environment image.
+		*/
+		void drawSZ(Mat &img, string sz, bool is_s, json &data);
 };
 
 #endif

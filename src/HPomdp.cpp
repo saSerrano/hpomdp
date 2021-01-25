@@ -3709,830 +3709,6 @@ int HPomdp::getSizeS(int const &i)
 	else return S_[i].size();
 }
 
-bool HPomdp::hPolPlan(string const &gs,bool const &debug)
-{
-	//Hierarchical policy as a vector of local policies
-	vector<policy> h_pol;
-
-	//Verify that the goal state exists in the hierarchy
-	if(hs_.ply(gs) < 0) return false;
-
-	//Get the hierarchical state of the goal state
-	vector<string> h_gs = hs_.hieState(gs);
-
-	//Make the hierarchical policy start at the highest level, in the hierarchy of
-	//states, that has more than 1 abstract state
-	int top_diff_lvl(-1);
-	for(unsigned int i = 0; i < hs_.depth(); i++)
-	{
-		auto tmp = hs_.keysAtLevel(i);
-		if(tmp.size() > 1)
-		{
-			top_diff_lvl = i;
-			break;
-		}
-	}
-
-	//----------------------------------------------------------------------------
-	// BUILD H-POLICY
-
-	for(unsigned int i = top_diff_lvl - 1; i < (h_gs.size() - 1); i++)
-	{
-		//Parent state that bounds the state-space of each local policy
-		string parent_node(h_gs[i]);
-
-		//Index in global vectors for level "i"
-		int gvi = hs_.depth() - i - 1;
-
-		if(debug)
-		{
-			cout << "-------------------------" << endl;
-			cout << "Parent node: " + parent_node << endl;
-		}
-
-		//S,A,Z,T,O
-		vector<string> S,A,Z;
-		vector<pMat> T,O;
-		vector<string>::iterator ite;
-
-		//-----------------------------
-		//S: children & not-children neighbor states
-		if((i+1) != top_diff_lvl)
-		{
-			S = hs_.keysOfChildren(parent_node);
-			vector<string> peri;
-			for(unsigned int j = 0; j < S.size(); j++)
-			{
-				vector<string> tmp = nh_.neigToExc(S[j],S);
-				for(unsigned int k = 0; k < tmp.size(); k++)
-				{
-					ite = find(peri.begin(),peri.end(),tmp[k]);
-					if(ite == peri.end()) peri.push_back(tmp[k]);
-				}
-			}
-			S.insert(S.end(),peri.begin(),peri.end());
-
-			//Add the 'extra'
-			S.push_back("extra");
-		}
-		//Loc-pol at the highest level with more than 1 state
-		else S = hs_.keysAtLevel(top_diff_lvl);
-
-		//-----------------------------
-		//A: actions that start and end in a pair of states in S
-		for(unsigned int j = 0; j < A_[gvi-1].size(); j++)
-		{
-			vector<string> s0 = get<0>(T_[gvi-1][j]);
-			vector<string> s1 = get<1>(T_[gvi-1][j]);
-			vector<double> tp = get<2>(T_[gvi-1][j]);
-			for(unsigned int k = 0; k < s0.size(); k++)
-			{
-				//Avoid adding actions that cannot change the model's state
-				if(s0[k] == s1[k] && tp[k] == 1)continue;
-
-				ite = find(S.begin(),S.end(),s0[k]);
-				if(ite == S.end()) continue;
-				ite = find(S.begin(),S.end(),s1[k]);
-				if(ite == S.end()) continue;
-				A.push_back(A_[gvi-1][j]);
-				break;
-			}
-		}
-
-		//-----------------------------
-		//Z: observations that have non-prob of being perceived from
-		// a state in S and an action in A
-		for(unsigned int j = 0; j < A.size(); j++)
-		{
-			ite = find(A_[gvi-1].begin(),A_[gvi-1].end(),A[j]);
-			int ai = distance(A_[gvi-1].begin(),ite);
-			vector<string> s0 = get<0>(O_[gvi-1][ai]);
-			vector<string> ob = get<1>(O_[gvi-1][ai]);
-			for(unsigned int k = 0; k < s0.size(); k++)
-			{
-				ite = find(S.begin(),S.end(),s0[k]);
-				if(ite != S.end())
-				{
-					ite = find(Z.begin(),Z.end(),ob[k]);
-					if(ite == Z.end()) Z.push_back(ob[k]);
-				}
-			}
-		}
-
-		//-----------------------------
-		//T & O: transition & observation probabilities for elments in S, Z & A
-		for(unsigned int j = 0; j < A.size(); j++)
-		{
-			ite = find(A_[gvi-1].begin(),A_[gvi-1].end(),A[j]);
-			int ai = distance(A_[gvi-1].begin(),ite);
-			vector<string> s0 = get<0>(T_[gvi-1][ai]);
-			vector<string> s1 = get<1>(T_[gvi-1][ai]);
-			vector<double> tp = get<2>(T_[gvi-1][ai]);
-			vector<string> ss = get<0>(O_[gvi-1][ai]);
-			vector<string> ob = get<1>(O_[gvi-1][ai]);
-			vector<double> op = get<2>(O_[gvi-1][ai]);
-
-			//Get the T probabilities that start & end in states of S
-			vector<string> tmp_s;
-			vector<double> tmp_d;
-			pMat tmp_T(tmp_s,tmp_s,tmp_d);
-			for(unsigned int k = 0; k < s0.size(); k++)
-			{
-				ite = find(S.begin(),S.end(),s0[k]);
-				if(ite != S.end())
-				{
-					//Evaluate if the ending state is in the local state space
-					string loc_s1;
-					ite = find(S.begin(),S.end(),s1[k]);
-					if(ite != S.end()) loc_s1 = s1[k];
-					else loc_s1 = "extra";
-
-					//Check if the s0->"extra" transition has already been 
-					bool not_repeated(true);
-					if(loc_s1 == "extra")
-					{
-						for(unsigned int l = 0; l < get<0>(tmp_T).size(); l++)
-						{
-							if(get<0>(tmp_T)[l] == s0[k] && get<1>(tmp_T)[l] == "extra")
-							{
-								not_repeated = false;
-								get<2>(tmp_T)[l] += tp[k];
-								break;
-							}
-						}
-					}
-
-					//Insert the l-th transition probability
-					if(not_repeated)
-					{
-						get<0>(tmp_T).push_back(s0[k]);
-						get<1>(tmp_T).push_back(loc_s1);
-						get<2>(tmp_T).push_back(tp[k]);
-					}
-				}
-			}
-
-			//Get the O probabilities that start & end in states of S
-			pMat tmp_O(tmp_s,tmp_s,tmp_d);
-			for(unsigned int k = 0; k < ss.size(); k++)
-			{
-				ite = find(S.begin(),S.end(),ss[k]);
-				if(ite == S.end()) continue;
-
-				//Save the l-th transition probability
-				get<0>(tmp_O).push_back(ss[k]);
-				get<1>(tmp_O).push_back(ob[k]);
-				get<2>(tmp_O).push_back(op[k]);
-			}
-
-			//Add distributions for the extra state
-			if(find(S.begin(),S.end(),"extra") != S.end())
-			{
-				get<0>(tmp_T).push_back("extra");
-				get<1>(tmp_T).push_back("extra");
-				get<2>(tmp_T).push_back(1.0);
-
-				get<0>(tmp_O).push_back("extra");
-				get<1>(tmp_O).push_back("none");
-				get<2>(tmp_O).push_back(1.0);
-			}
-
-			//Save the j-th action's T-maxtrix
-			T.push_back(tmp_T);
-			//Save the j-th action's O-maxtrix
-			O.push_back(tmp_O);
-		}
-
-		//-----------------------------
-		//Terminate: add the elements associated to the "terminate" action
-		S.push_back("absb-g");
-		S.push_back("absb-ng");
-		Z.push_back("none");
-		A.push_back("terminate");
-		vector<string> tmp_s;
-		vector<double> tmp_d;
-		pMat term_T(tmp_s,tmp_s,tmp_d);
-		pMat term_O(tmp_s,tmp_s,tmp_d);
-		//Set the T & O functions for the "terminate" action
-		for(unsigned int j = 0; j < S.size(); j++)
-		{
-			//"terminate" transits from the goal state to "absb-g"
-			if(S[j] == h_gs[i+1])
-			{
-				get<0>(term_T).push_back(S[j]);
-				get<1>(term_T).push_back("absb-g");
-				get<2>(term_T).push_back(1);
-			}
-			//"terminate" does not change absorbent states & "extra"
-			else if(S[j] == "absb-g" || S[j] == "absb-ng" || S[j] == "extra")
-			{
-				get<0>(term_T).push_back(S[j]);
-				get<1>(term_T).push_back(S[j]);
-				get<2>(term_T).push_back(1);
-			}
-			//"terminate" moves any non-goal state to "absb-ng"
-			else
-			{
-				get<0>(term_T).push_back(S[j]);
-				get<1>(term_T).push_back("absb-ng");
-				get<2>(term_T).push_back(1);
-			}
-
-			get<0>(term_O).push_back(S[j]);
-			get<1>(term_O).push_back("none");
-			get<2>(term_O).push_back(1);
-		}
-		//Save the T & O matrices for teh "terminate" action
-		T.push_back(term_T);
-		O.push_back(term_O);
-		//Set the T & O probs. for absorbent states as starting state 
-		//for every action different from "terminate"
-		for(unsigned int j = 0; j < A.size(); j++)
-		{
-			if(A[j] == "terminate") continue;
-			
-			//Transition for "absb-g"
-			get<0>(T[j]).push_back("absb-g");
-			get<1>(T[j]).push_back("absb-g");
-			get<2>(T[j]).push_back(1.0);
-			get<0>(O[j]).push_back("absb-g");
-			get<1>(O[j]).push_back("none");
-			get<2>(O[j]).push_back(1.0);
-
-			//Transition for "absb-ng"
-			get<0>(T[j]).push_back("absb-ng");
-			get<1>(T[j]).push_back("absb-ng");
-			get<2>(T[j]).push_back(1.0);
-			get<0>(O[j]).push_back("absb-ng");
-			get<1>(O[j]).push_back("none");
-			get<2>(O[j]).push_back(1.0);
-		}
-
-		//-----------------------------
-		//help: add the elements associated to the "help" action
-		if(find(S.begin(),S.end(),"extra") != S.end())
-		{
-			tmp_s.clear();
-			tmp_d.clear();
-			pMat help_T(tmp_s,tmp_s,tmp_d);
-			pMat help_O(tmp_s,tmp_s,tmp_d);
-			for(unsigned int j = 0; j < S.size(); j++)
-			{
-				if(S[j] == "absb-g" || S[j] == "absb-ng")
-				{
-					//"help" does not change absorbent states
-					get<0>(help_T).push_back(S[j]);
-					get<1>(help_T).push_back(S[j]);
-					get<2>(help_T).push_back(1.0);
-				}
-				else
-				{
-					//"help" from any non-absorbent state goes to "absb-ng"
-					get<0>(help_T).push_back(S[j]);
-					get<1>(help_T).push_back("absb-ng");
-					get<2>(help_T).push_back(1.0);
-				}
-
-				//Observation matrix
-				get<0>(help_O).push_back(S[j]);
-				get<1>(help_O).push_back("none");
-				get<2>(help_O).push_back(1.0);
-			}
-			//Save the "help" action and its distributions
-			A.push_back("help");
-			T.push_back(help_T);
-			O.push_back(help_O);
-		}
-
-		//Truncate probabilites precision to avoid precision errors
-		//of complete prob. distributions
-		for(unsigned int j = 0; j < A.size(); j++)
-		{
-			for(unsigned int k = 0; k < S.size(); k++)
-			{
-				//Truncate the precision of the k-th starting state T-distribution
-				double total_p(0.0);
-				double max_p(0.0);
-				int max_i(-1);
-				for(unsigned int l = 0; l < get<0>(T[j]).size(); l++)
-				{
-					if(get<0>(T[j])[l] == S[k])
-					{
-						get<2>(T[j])[l] = truncate(get<2>(T[j])[l],6);
-						total_p += get<2>(T[j])[l];
-						if(get<2>(T[j])[l] > max_p)
-						{
-							max_p = get<2>(T[j])[l];
-							max_i = l;
-						}
-					}
-				}
-				double comp_p = 1 - total_p;
-				get<2>(T[j])[max_i] += comp_p;
-
-				//Truncate the precision of the k-th starting state T-distribution
-				total_p = 0.0;
-				max_p = 0.0;
-				max_i = -1;
-				for(unsigned int l = 0; l < get<0>(O[j]).size(); l++)
-				{
-					if(get<0>(O[j])[l] == S[k])
-					{
-						get<2>(O[j])[l] = truncate(get<2>(O[j])[l],6);
-						total_p += get<2>(O[j])[l];
-						if(get<2>(O[j])[l] > max_p)
-						{
-							max_p = get<2>(O[j])[l];
-							max_i = l;
-						}
-					}
-				}
-				comp_p = 1 - total_p;
-				get<2>(O[j])[max_i] += comp_p;
-			}
-		}
-
-		//-----------------------------
-		//R: define the reward & punishment for the local policy that has h_gs[i+1] as goal state
-		string goal_state = h_gs[i+1];
-		vector<tuple<string,string> > g_pair,p_pair;
-		vector<string> p_vec;
-
-		//For abstract actions, punish to  execute them from states that  are not their S0 by design
-		if(gvi > 0)
-		{
-			for(unsigned int l = 0; l < A.size(); l++)
-			{
-				//Decompose AA's to get their intended S0 by design
-				vector<string> a_vec = splitStr(A[l],"->");
-				if(a_vec.size() != 2) continue;
-				for(unsigned int m = 0; m < S.size(); m++)
-				{
-					//-1 will be the R only for the intended S0 or 'absb'
-					if(a_vec[0] == S[m] || "absb-g" == S[m] || "absb-ng" == S[m] || "extra" == S[m]) continue;
-
-					//Punish executing the l-th abstract action from non-intended S0 abstract states and 'extra'
-					tuple<string,string> pp_tmp(S[m],A[l]);
-					p_pair.push_back(pp_tmp);
-				}
-			}
-		}
-
-		//Reward signals associated to "extra" & "help"
-		if(find(S.begin(),S.end(),"extra") != S.end())
-		{
-			//Punish executing any action diff. to "help" from "extra"
-			for(unsigned int j = 0; j < A.size(); j++)
-				if(A[j] != "help") p_pair.push_back(tuple<string,string>("extra",A[j]));
-
-			//Punish executing "help" from any state diff. to "extra"
-			for(unsigned int j = 0; j < S.size(); j++)
-				if(S[j] != "extra") p_pair.push_back(tuple<string,string>(S[j],"help"));
-
-			//Punish transiting to "extra"
-			p_vec.push_back("extra");
-
-			//Reward executing "help" from "extra"
-			g_pair.push_back(tuple<string,string>("extra","help"));
-		}
-
-		//Reward signals associated to the "terminate" action
-		for(unsigned int j = 0; j < S.size(); j++)
-		{
-			//Reward executing "terminate" from the goal state or "absb-g"
-			if(S[j] == "absb-g" || S[j] == goal_state)
-				g_pair.push_back(tuple<string,string>(S[j],string("terminate")));
-			//Punish executing "terminate" from any state that is no the goal state or "absb-g"
-			else p_pair.push_back(tuple<string,string>(S[j],string("terminate")));
-		}
-
-		//Verify that the POMDP is a valid one
-		bool res = checkPomdp(S,A,Z,T,O);
-		if(!res)
-		{
-			cout << ">> Error: invalid POMDP for local policy at level " << i+1 << "." << endl;
-			return false;
-		}
-
-		//-----------------------------
-		//POMDP: Generate the pomdp & compute the local policy
-		bool success(false);
-		double discount = 0.95;
-		vector<string> r_order;//Reward printing order
-		r_order.push_back("g");
-		r_order.push_back("p");
-		r_order.push_back("pp");
-		r_order.push_back("gp");
-		pomdp p = generatePomdp(S,A,Z,T,O,tmp_s,g_pair,p_vec,p_pair,discount,r_order,success);
-
-		if(debug)
-		{
-			cout << "Goal state: " + goal_state << endl;
-			cout << "Check pomdp: " << res << endl;
-			cout << "Generate pomdp: " << success << endl;
-		}
-
-		//Solve the POMDP to get the policy
-		policy loc_pol = solveModel(p,75,10,0.01);
-
-		if(debug)
-		{
-			vector<string> pS = get<3>(loc_pol);
-			vector<string> pA = get<1>(loc_pol);
-			vector<string> pZ = get<2>(loc_pol);
-			vector<string> pAS = get<4>(loc_pol);
-			cout << ">> POLICY COMPONENTS"  << endl;
-			cout << "S: \n\t";
-			for(unsigned int j = 0; j < pS.size(); j++) cout << pS[j] + " ";
-			cout << endl;
-			cout << "A: \n\t";
-			for(unsigned int j = 0; j < pA.size(); j++) cout << pA[j] + " ";
-			cout << endl;
-			cout << "Z: \n\t";
-			for(unsigned int j = 0; j < pZ.size(); j++) cout << pZ[j] + " ";
-			cout << endl;
-			cout << "Abs. S: \n\t";
-			for(unsigned int j = 0; j < pAS.size(); j++) cout << pAS[j] + " ";
-			cout << endl;
-			cout << "-------------------------------------------------" << endl;
-		}
-
-		//-----------------------------
-		//Save the local policy
-		h_pol.push_back(loc_pol);
-	}
-
-	//Store the hierarchical policy in the class' global variable
-	HP_ = h_pol;
-
-	return true;
-}
-
-bool HPomdp::hPolExec(int const &max_steps,bool const &debug)
-{
-	//----------------------------------------------------------------------------
-	// EXECUTE H-POLICY
-	if(HP_.size() == 0)
-	{
-		cout << ">> Error[hPolExec]: There is no hierarchical policy." << endl;
-		return false;
-	}
-
-	//Start the execution of the hierarchical policy in a top-down manner
-	for(int i = 0; i < HP_.size(); i++)
-	{
-		if(debug) cout << ">> START loc-pol(" << i << ")" << endl;
-
-		//Execute the i-th local policy
-		string last_a = execPA("",i,max_steps,debug);
-
-		if(debug)
-		{
-			cout << ">> END loc-pol(" << i << "), last-action: " + last_a << endl;
-			cout << "------------------------------------------" << endl;
-		}
-
-		//Determine the next policy to be executed
-		if(last_a == "help") i -= 2;// (i-1)-th will be next
-		else if(last_a == "terminate") continue;// (i+1)-th will be next
-		else if(last_a.rfind("step", 0) == 0) return false;
-		else if(last_a == "stuck") return false;
-	}
-
-	if(debug) cout << ">> Hierarchical policy done." << endl;
-
-	return true;
-}
-
-string HPomdp::execPA(string const &a,int const &lp_id,int const &max_steps,bool const &debug)
-{
-	//----------------------------------------------------
-	//Determine the case of execution
-	int exe_case;
-	vector<string>::iterator ite;
-	map<string,policy>::iterator ite2 = AA_.find(a);
-	if(ite2 != AA_.end())
-	{
-		//An action will be executed
-		ite = find(A_[0].begin(),A_[0].end(),a);
-		if(ite != A_[0].end())
-		{
-			//An concrete action will be executed
-			exe_case = 0;
-		}
-		else
-		{
-			//An abstract action will be executed
-			exe_case = 1;
-		}
-	}
-	else
-	{
-		if(lp_id >= 0 && lp_id < HP_.size())
-		{
-			//A local policy will be executed
-			exe_case = 2;
-		}
-		else
-		{
-			cout << ">> Error[execPA]: '" + a + "' is an invalid action and " << lp_id << " an invalid index for a local policy (HP_.size() is " << HP_.size() << ")." << endl;
-			return string("");
-		}
-	}
-
-	//----------------------------------------------------
-	//Execute the concrete action if that is the case
-	if(exe_case == 0)
-	{
-		string z = interactWithWorld(a);//Perform action
-		updateBeliefDyn(a,z);//Update the global belief vector
-		return z;
-	}
-
-	//----------------------------------------------------
-	//Get the policy to be executed (local or AA)
-	vector<string> tmp;
-	policy pol(POMDP::Policy(1,1,1),tmp,tmp,tmp,tmp,POMDP::Model<MDP::Model>(1,1,1,0.9));//empty policy tuple
-	if(exe_case == 1)//Get an abstract action
-		pol = AA_.at(a);
-	else if(exe_case == 2)//Get a local policy
-		pol = HP_[lp_id];
-
-	//----------------------------------------------------
-	//Policy execution
-	//Get the global-vector index at which the actions of the policy are
-	int gvi(-1);
-	int tdl(-1);
-	for(unsigned int i = 0; i < hs_.depth(); i++)
-	{
-		vector<string> tmp = hs_.keysAtLevel(i);
-		if(tmp.size() > 1)
-		{
-			tdl = i;
-			break;
-		}
-	}
-	if(exe_case == 1)
-	{
-		vector<string> pol_A = get<1>(pol);
-		string test_a;
-		for(unsigned int i = 0; i < pol_A.size(); i++)
-		{
-			if(pol_A[i] != "terminate")
-			{
-				test_a = pol_A[i];
-				break;
-			}
-		}
-		for(unsigned int i = 0; i < A_.size(); i++)
-		{
-			ite = find(A_[i].begin(),A_[i].end(),test_a);
-			if(ite != A_[i].end())
-			{
-				gvi = i;
-				break;
-			}
-		}
-	}
-	else if(exe_case == 2)
-	{
-		gvi = S_.size() - tdl - lp_id;
-	}
-
-	//Create the initial belief vector
-	vector<string> pol_S = get<3>(pol);
-	POMDP::Belief B(pol_S.size());
-	ite = find(pol_S.begin(),pol_S.end(),"extra");
-	int e_idx = distance(pol_S.begin(),ite);
-	bool has_extra(ite != pol_S.end());
-	for(unsigned int i = 0; i < pol_S.size(); i++) B(i) = 0.0;
-	for(map<string,double>::iterator it = B_[gvi].begin(); it != B_[gvi].end(); ++it)
-	{
-		ite = find(pol_S.begin(),pol_S.end(),it->first);
-		if(ite != pol_S.end())
-		{
-			//Assign prob to a known state
-			int idx = distance(pol_S.begin(),ite);
-			B(idx) = it->second;
-		}
-		//Unkown states' probs are added to the "extra" state
-		else B(e_idx) += it->second;
-	}
-
-	//debug
-	int os = (S_.size() - tdl) - gvi;
-	string offset("");
-	for(int i = 0; i < os; i++)
-		offset += "\t";
-	if(debug)
-	{
-		cout << offset + "INIT-B: ";
-		for(unsigned int i = 0; i < pol_S.size(); i++)
-			cout << pol_S[i] + "(" << B(i) << ") ";
-		cout << endl;
-	}
-
-	//vector to monitor repeated abstract actions to detect if the system gets stuck
-	vector<string> deb;
-
-	//Compute the max-entropy for the extra state & get its index in the local S
-	int extra_idx = e_idx;
-	double max_se(0.0);
-	double non_mod_s(S_[gvi].size());
-	if(has_extra)
-	{
-		for(unsigned int i = 0; i < pol_S.size(); i++)
-		{
-			if(find(S_[gvi].begin(),S_[gvi].end(),pol_S[i]) != S_[gvi].end())
-				non_mod_s -= 1.0;
-		}
-		max_se = log2(1/non_mod_s) * (1/non_mod_s);
-		max_se *= (static_cast<double>(-1) * non_mod_s);
-	}
-
-	//Execution loop
-	vector<string> pol_A = get<1>(pol);
-	string last_action("");
-	POMDP::Policy p_pol = get<0>(pol);
-	POMDP::ValueFunction vf = p_pol.getValueFunction();
-	int horizon = p_pol.getH();
-	bool bl(false);
-	while(true)
-	{
-		for(int t = horizon; t >= 1; t--)
-		{
-			//Sample the next action
-			size_t action_idx;
-			tuple<size_t,size_t> a_id;
-			if(has_extra)
-			{
-				//The 'extra'-state's current entropy in the not-modeled region of S
-				vector<double> se_vec;
-				for(map<string,double>::iterator it = B_[gvi].begin(); it != B_[gvi].end(); ++it)
-				{
-					ite = find(pol_S.begin(),pol_S.end(),it->first);
-					if(ite == pol_S.end() && it->second > 0.0) se_vec.push_back(it->second);
-				}
-				double se = entropy(se_vec);
-
-				//The current entropy in the local state space
-				se_vec.clear();
-				for(unsigned int i = 0; i < pol_S.size(); i++)
-				{
-					if(pol_S[i] != "extra" && B(i) > 0.0)
-						se_vec.push_back(B(i));
-				}
-				double loc_se = entropy(se_vec);
-
-				//When there is an extra state, decide which selection criteria will be followed
-				//based on the entropy in the modeled and un-modeled state space regions
-				if(loc_se >= se)
-				{
-					//Get the action using the policy as interface
-					a_id = p_pol.sampleAction(B,t);
-					action_idx = get<0>(a_id);
-				}
-				else
-				{
-					//Get the action by accessing the value function
-					action_idx = localSampleAction(vf,B,t,extra_idx,se,max_se);
-				}
-			}
-			else
-			{
-				//Get the action using the policy as interface
-				a_id = p_pol.sampleAction(B,t);
-				action_idx = get<0>(a_id);
-			}
-
-			//Execute the action
-			string a = pol_A[action_idx];
-			string z;
-
-			//debug
-			if(gvi > 0)
-			{
-				//monitor only abstract actions
-				if(deb.size() == 0) deb.push_back(a);
-				else if(deb[deb.size()-1] == a) deb.push_back(a);
-				else if(deb[deb.size()-1] != a)
-				{
-					deb.clear();
-					deb.push_back(a);
-				}
-
-				//failure criteria
-				if(deb.size() > 10) stuck = true;
-
-				if(false)
-				{
-					//Write a file with info on the stuck policy
-					ofstream outf("STUCK-POL.txt");
-					outf << "S: ";
-					for(unsigned int i = 0; i < pol_S.size(); i++) outf << pol_S[i]+" ";
-					outf << endl;
-					outf << "A: ";
-					for(unsigned int i = 0; i < pol_A.size(); i++) outf << pol_A[i]+" ";
-					outf << endl;
-
-					for(unsigned int i = 0; i < pol_A.size(); i++)
-					{
-						int id = distance(A_[gvi].begin(),find(A_[gvi].begin(),A_[gvi].end(),pol_A[i]));
-						outf << "T-DIST: "+pol_A[i] << endl;
-						for(unsigned int j = 0; j < pol_S.size(); j++)
-						{
-							for(unsigned int k = 0; k < get<0>(T_[gvi][id]).size(); k++)
-							{
-							if(get<0>(T_[gvi][id])[k] == pol_S[j])
-								outf << "\t"+get<0>(T_[gvi][id])[k]+"->"+get<1>(T_[gvi][id])[k]+": "<< get<2>(T_[gvi][id])[k] << endl;
-							}
-							outf << "\t-----------------------" << endl;
-						}
-					}
-					outf.close();
-
-
-					cout << endl << "GOT STUCK!" << endl;
-					cin.get();
-				}
-			}
-
-			//debug: display action
-			if(debug)
-			{
-				if(gvi != 0)
-				{
-					cout << offset + a << endl;
-					cin.get();
-				}
-				else if(a != "terminate" && a != "help")
-					cout << offset + a + "-";
-			}
-
-			//Execute the action
-			if(a == "terminate" || a == "help")
-			{
-				last_action = a;
-				bl = true;
-				break;
-			}
-			else z = execPA(a,-1,max_steps,debug);
-
-			//Verify if the amount of steps taken so far are within the allowed range
-			if(getStepCounter() > max_steps)
-			{
-				return string("step-limit-reached:") + to_string(max_steps);
-			}
-
-			//Verify if the agent got stuck
-			if(stuck)
-			{
-				return string("stuck");
-			}
-
-			//debug: display observation for concrete actions
-			if(debug)
-			{
-				if(gvi == 0)
-				{
-					cout << z << endl;
-					cin.get();
-				}
-			}
-
-			//Update the local belief vector
-			for(unsigned int i = 0; i < pol_S.size(); i++) B(i) = 0.0;
-			for(map<string,double>::iterator it = B_[gvi].begin(); it != B_[gvi].end(); ++it)
-			{
-				ite = find(pol_S.begin(),pol_S.end(),it->first);
-				if(ite != pol_S.end())
-				{
-					//Assign prob to a known state
-					int idx = distance(pol_S.begin(),ite);
-					B(idx) = it->second;
-				}
-				//Unkown states' probs are added to the "extra" state
-				else B(e_idx) += it->second;
-			}
-		}
-
-		if(bl) break;
-	}
-
-	//debug
-	if(debug)
-	{
-		cout << offset + "END-B: ";
-		for(unsigned int i = 0; i < pol_S.size(); i++)
-			cout << pol_S[i] + "(" << B(i) << ") ";
-		cout << endl;
-	}
-
-	//----------------------------------------------------
-	//Return final action of the policy ("terminate" or "help")
-	return last_action;
-}
-
 double HPomdp::entropy(vector<double> const &p)
 {
 	//Make sure the probabilities are normalized
@@ -5497,4 +4673,1796 @@ bool HPomdp::saveSummFile(vector<double> const &v1,vector<double> const &v2,vect
 
 	return true;
 }
+
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+bool HPomdp::hPolPlan(string const &gs,bool const &debug)
+{
+	//Hierarchical policy as a vector of local policies
+	vector<policy> h_pol;
+
+	//Verify that the goal state exists in the hierarchy
+	if(hs_.ply(gs) < 0) return false;
+
+	//Get the hierarchical state of the goal state
+	vector<string> h_gs = hs_.hieState(gs);
+
+	//Make the hierarchical policy start at the highest level, in the hierarchy of
+	//states, that has more than 1 abstract state
+	int top_diff_lvl(-1);
+	for(unsigned int i = 0; i < hs_.depth(); i++)
+	{
+		auto tmp = hs_.keysAtLevel(i);
+		if(tmp.size() > 1)
+		{
+			top_diff_lvl = i;
+			break;
+		}
+	}
+
+	//----------------------------------------------------------------------------
+	// BUILD H-POLICY
+
+	for(unsigned int i = top_diff_lvl - 1; i < (h_gs.size() - 1); i++)
+	{
+		//Parent state that bounds the state-space of each local policy
+		string parent_node(h_gs[i]);
+
+		//Index in global vectors for level "i"
+		int gvi = hs_.depth() - i - 1;
+
+		if(debug)
+		{
+			cout << "-------------------------" << endl;
+			cout << "Parent node: " + parent_node << endl;
+		}
+
+		//S,A,Z,T,O
+		vector<string> S,A,Z;
+		vector<pMat> T,O;
+		vector<string>::iterator ite;
+
+		//-----------------------------
+		//S: children & not-children neighbor states
+		if((i+1) != top_diff_lvl)
+		{
+			S = hs_.keysOfChildren(parent_node);
+			vector<string> peri;
+			for(unsigned int j = 0; j < S.size(); j++)
+			{
+				vector<string> tmp = nh_.neigToExc(S[j],S);
+				for(unsigned int k = 0; k < tmp.size(); k++)
+				{
+					ite = find(peri.begin(),peri.end(),tmp[k]);
+					if(ite == peri.end()) peri.push_back(tmp[k]);
+				}
+			}
+			S.insert(S.end(),peri.begin(),peri.end());
+
+			//Add the 'extra'
+			S.push_back("extra");
+		}
+		//Loc-pol at the highest level with more than 1 state
+		else S = hs_.keysAtLevel(top_diff_lvl);
+
+		//-----------------------------
+		//A: actions that start and end in a pair of states in S
+		for(unsigned int j = 0; j < A_[gvi-1].size(); j++)
+		{
+			vector<string> s0 = get<0>(T_[gvi-1][j]);
+			vector<string> s1 = get<1>(T_[gvi-1][j]);
+			vector<double> tp = get<2>(T_[gvi-1][j]);
+			for(unsigned int k = 0; k < s0.size(); k++)
+			{
+				//Avoid adding actions that cannot change the model's state
+				if(s0[k] == s1[k] && tp[k] == 1)continue;
+
+				ite = find(S.begin(),S.end(),s0[k]);
+				if(ite == S.end()) continue;
+				ite = find(S.begin(),S.end(),s1[k]);
+				if(ite == S.end()) continue;
+				A.push_back(A_[gvi-1][j]);
+				break;
+			}
+		}
+
+		//-----------------------------
+		//Z: observations that have non-prob of being perceived from
+		// a state in S and an action in A
+		for(unsigned int j = 0; j < A.size(); j++)
+		{
+			ite = find(A_[gvi-1].begin(),A_[gvi-1].end(),A[j]);
+			int ai = distance(A_[gvi-1].begin(),ite);
+			vector<string> s0 = get<0>(O_[gvi-1][ai]);
+			vector<string> ob = get<1>(O_[gvi-1][ai]);
+			for(unsigned int k = 0; k < s0.size(); k++)
+			{
+				ite = find(S.begin(),S.end(),s0[k]);
+				if(ite != S.end())
+				{
+					ite = find(Z.begin(),Z.end(),ob[k]);
+					if(ite == Z.end()) Z.push_back(ob[k]);
+				}
+			}
+		}
+
+		//-----------------------------
+		//T & O: transition & observation probabilities for elments in S, Z & A
+		for(unsigned int j = 0; j < A.size(); j++)
+		{
+			ite = find(A_[gvi-1].begin(),A_[gvi-1].end(),A[j]);
+			int ai = distance(A_[gvi-1].begin(),ite);
+			vector<string> s0 = get<0>(T_[gvi-1][ai]);
+			vector<string> s1 = get<1>(T_[gvi-1][ai]);
+			vector<double> tp = get<2>(T_[gvi-1][ai]);
+			vector<string> ss = get<0>(O_[gvi-1][ai]);
+			vector<string> ob = get<1>(O_[gvi-1][ai]);
+			vector<double> op = get<2>(O_[gvi-1][ai]);
+
+			//Get the T probabilities that start & end in states of S
+			vector<string> tmp_s;
+			vector<double> tmp_d;
+			pMat tmp_T(tmp_s,tmp_s,tmp_d);
+			for(unsigned int k = 0; k < s0.size(); k++)
+			{
+				ite = find(S.begin(),S.end(),s0[k]);
+				if(ite != S.end())
+				{
+					//Evaluate if the ending state is in the local state space
+					string loc_s1;
+					ite = find(S.begin(),S.end(),s1[k]);
+					if(ite != S.end()) loc_s1 = s1[k];
+					else loc_s1 = "extra";
+
+					//Check if the s0->"extra" transition has already been 
+					bool not_repeated(true);
+					if(loc_s1 == "extra")
+					{
+						for(unsigned int l = 0; l < get<0>(tmp_T).size(); l++)
+						{
+							if(get<0>(tmp_T)[l] == s0[k] && get<1>(tmp_T)[l] == "extra")
+							{
+								not_repeated = false;
+								get<2>(tmp_T)[l] += tp[k];
+								break;
+							}
+						}
+					}
+
+					//Insert the l-th transition probability
+					if(not_repeated)
+					{
+						get<0>(tmp_T).push_back(s0[k]);
+						get<1>(tmp_T).push_back(loc_s1);
+						get<2>(tmp_T).push_back(tp[k]);
+					}
+				}
+			}
+
+			//Get the O probabilities that start & end in states of S
+			pMat tmp_O(tmp_s,tmp_s,tmp_d);
+			for(unsigned int k = 0; k < ss.size(); k++)
+			{
+				ite = find(S.begin(),S.end(),ss[k]);
+				if(ite == S.end()) continue;
+
+				//Save the l-th transition probability
+				get<0>(tmp_O).push_back(ss[k]);
+				get<1>(tmp_O).push_back(ob[k]);
+				get<2>(tmp_O).push_back(op[k]);
+			}
+
+			//Add distributions for the extra state
+			if(find(S.begin(),S.end(),"extra") != S.end())
+			{
+				get<0>(tmp_T).push_back("extra");
+				get<1>(tmp_T).push_back("extra");
+				get<2>(tmp_T).push_back(1.0);
+
+				get<0>(tmp_O).push_back("extra");
+				get<1>(tmp_O).push_back("none");
+				get<2>(tmp_O).push_back(1.0);
+			}
+
+			//Save the j-th action's T-maxtrix
+			T.push_back(tmp_T);
+			//Save the j-th action's O-maxtrix
+			O.push_back(tmp_O);
+		}
+
+		//-----------------------------
+		//Terminate: add the elements associated to the "terminate" action
+		S.push_back("absb-g");
+		S.push_back("absb-ng");
+		Z.push_back("none");
+		A.push_back("terminate");
+		vector<string> tmp_s;
+		vector<double> tmp_d;
+		pMat term_T(tmp_s,tmp_s,tmp_d);
+		pMat term_O(tmp_s,tmp_s,tmp_d);
+		//Set the T & O functions for the "terminate" action
+		for(unsigned int j = 0; j < S.size(); j++)
+		{
+			//"terminate" transits from the goal state to "absb-g"
+			if(S[j] == h_gs[i+1])
+			{
+				get<0>(term_T).push_back(S[j]);
+				get<1>(term_T).push_back("absb-g");
+				get<2>(term_T).push_back(1);
+			}
+			//"terminate" does not change absorbent states & "extra"
+			else if(S[j] == "absb-g" || S[j] == "absb-ng" || S[j] == "extra")
+			{
+				get<0>(term_T).push_back(S[j]);
+				get<1>(term_T).push_back(S[j]);
+				get<2>(term_T).push_back(1);
+			}
+			//"terminate" moves any non-goal state to "absb-ng"
+			else
+			{
+				get<0>(term_T).push_back(S[j]);
+				get<1>(term_T).push_back("absb-ng");
+				get<2>(term_T).push_back(1);
+			}
+
+			get<0>(term_O).push_back(S[j]);
+			get<1>(term_O).push_back("none");
+			get<2>(term_O).push_back(1);
+		}
+		//Save the T & O matrices for teh "terminate" action
+		T.push_back(term_T);
+		O.push_back(term_O);
+		//Set the T & O probs. for absorbent states as starting state 
+		//for every action different from "terminate"
+		for(unsigned int j = 0; j < A.size(); j++)
+		{
+			if(A[j] == "terminate") continue;
+			
+			//Transition for "absb-g"
+			get<0>(T[j]).push_back("absb-g");
+			get<1>(T[j]).push_back("absb-g");
+			get<2>(T[j]).push_back(1.0);
+			get<0>(O[j]).push_back("absb-g");
+			get<1>(O[j]).push_back("none");
+			get<2>(O[j]).push_back(1.0);
+
+			//Transition for "absb-ng"
+			get<0>(T[j]).push_back("absb-ng");
+			get<1>(T[j]).push_back("absb-ng");
+			get<2>(T[j]).push_back(1.0);
+			get<0>(O[j]).push_back("absb-ng");
+			get<1>(O[j]).push_back("none");
+			get<2>(O[j]).push_back(1.0);
+		}
+
+		//-----------------------------
+		//help: add the elements associated to the "help" action
+		if(find(S.begin(),S.end(),"extra") != S.end())
+		{
+			tmp_s.clear();
+			tmp_d.clear();
+			pMat help_T(tmp_s,tmp_s,tmp_d);
+			pMat help_O(tmp_s,tmp_s,tmp_d);
+			for(unsigned int j = 0; j < S.size(); j++)
+			{
+				if(S[j] == "absb-g" || S[j] == "absb-ng")
+				{
+					//"help" does not change absorbent states
+					get<0>(help_T).push_back(S[j]);
+					get<1>(help_T).push_back(S[j]);
+					get<2>(help_T).push_back(1.0);
+				}
+				else
+				{
+					//"help" from any non-absorbent state goes to "absb-ng"
+					get<0>(help_T).push_back(S[j]);
+					get<1>(help_T).push_back("absb-ng");
+					get<2>(help_T).push_back(1.0);
+				}
+
+				//Observation matrix
+				get<0>(help_O).push_back(S[j]);
+				get<1>(help_O).push_back("none");
+				get<2>(help_O).push_back(1.0);
+			}
+			//Save the "help" action and its distributions
+			A.push_back("help");
+			T.push_back(help_T);
+			O.push_back(help_O);
+		}
+
+		//Truncate probabilites precision to avoid precision errors
+		//of complete prob. distributions
+		for(unsigned int j = 0; j < A.size(); j++)
+		{
+			for(unsigned int k = 0; k < S.size(); k++)
+			{
+				//Truncate the precision of the k-th starting state T-distribution
+				double total_p(0.0);
+				double max_p(0.0);
+				int max_i(-1);
+				for(unsigned int l = 0; l < get<0>(T[j]).size(); l++)
+				{
+					if(get<0>(T[j])[l] == S[k])
+					{
+						get<2>(T[j])[l] = truncate(get<2>(T[j])[l],6);
+						total_p += get<2>(T[j])[l];
+						if(get<2>(T[j])[l] > max_p)
+						{
+							max_p = get<2>(T[j])[l];
+							max_i = l;
+						}
+					}
+				}
+				double comp_p = 1 - total_p;
+				get<2>(T[j])[max_i] += comp_p;
+
+				//Truncate the precision of the k-th starting state T-distribution
+				total_p = 0.0;
+				max_p = 0.0;
+				max_i = -1;
+				for(unsigned int l = 0; l < get<0>(O[j]).size(); l++)
+				{
+					if(get<0>(O[j])[l] == S[k])
+					{
+						get<2>(O[j])[l] = truncate(get<2>(O[j])[l],6);
+						total_p += get<2>(O[j])[l];
+						if(get<2>(O[j])[l] > max_p)
+						{
+							max_p = get<2>(O[j])[l];
+							max_i = l;
+						}
+					}
+				}
+				comp_p = 1 - total_p;
+				get<2>(O[j])[max_i] += comp_p;
+			}
+		}
+
+		//-----------------------------
+		//R: define the reward & punishment for the local policy that has h_gs[i+1] as goal state
+		string goal_state = h_gs[i+1];
+		vector<tuple<string,string> > g_pair,p_pair;
+		vector<string> p_vec;
+
+		//For abstract actions, punish to  execute them from states that  are not their S0 by design
+		if(gvi > 0)
+		{
+			for(unsigned int l = 0; l < A.size(); l++)
+			{
+				//Decompose AA's to get their intended S0 by design
+				vector<string> a_vec = splitStr(A[l],"->");
+				if(a_vec.size() != 2) continue;
+				for(unsigned int m = 0; m < S.size(); m++)
+				{
+					//-1 will be the R only for the intended S0 or 'absb'
+					if(a_vec[0] == S[m] || "absb-g" == S[m] || "absb-ng" == S[m] || "extra" == S[m]) continue;
+
+					//Punish executing the l-th abstract action from non-intended S0 abstract states and 'extra'
+					tuple<string,string> pp_tmp(S[m],A[l]);
+					p_pair.push_back(pp_tmp);
+				}
+			}
+		}
+
+		//Reward signals associated to "extra" & "help"
+		if(find(S.begin(),S.end(),"extra") != S.end())
+		{
+			//Punish executing any action diff. to "help" from "extra"
+			for(unsigned int j = 0; j < A.size(); j++)
+				if(A[j] != "help") p_pair.push_back(tuple<string,string>("extra",A[j]));
+
+			//Punish executing "help" from any state diff. to "extra"
+			for(unsigned int j = 0; j < S.size(); j++)
+				if(S[j] != "extra") p_pair.push_back(tuple<string,string>(S[j],"help"));
+
+			//Punish transiting to "extra"
+			p_vec.push_back("extra");
+
+			//Reward executing "help" from "extra"
+			g_pair.push_back(tuple<string,string>("extra","help"));
+		}
+
+		//Reward signals associated to the "terminate" action
+		for(unsigned int j = 0; j < S.size(); j++)
+		{
+			//Reward executing "terminate" from the goal state or "absb-g"
+			if(S[j] == "absb-g" || S[j] == goal_state)
+				g_pair.push_back(tuple<string,string>(S[j],string("terminate")));
+			//Punish executing "terminate" from any state that is no the goal state or "absb-g"
+			else p_pair.push_back(tuple<string,string>(S[j],string("terminate")));
+		}
+
+		//Verify that the POMDP is a valid one
+		bool res = checkPomdp(S,A,Z,T,O);
+		if(!res)
+		{
+			cout << ">> Error: invalid POMDP for local policy at level " << i+1 << "." << endl;
+			return false;
+		}
+
+		//-----------------------------
+		//POMDP: Generate the pomdp & compute the local policy
+		bool success(false);
+		double discount = 0.95;
+		vector<string> r_order;//Reward printing order
+		r_order.push_back("g");
+		r_order.push_back("p");
+		r_order.push_back("pp");
+		r_order.push_back("gp");
+		pomdp p = generatePomdp(S,A,Z,T,O,tmp_s,g_pair,p_vec,p_pair,discount,r_order,success);
+
+		if(debug)
+		{
+			cout << "Goal state: " + goal_state << endl;
+			cout << "Check pomdp: " << res << endl;
+			cout << "Generate pomdp: " << success << endl;
+		}
+
+		//Solve the POMDP to get the policy
+		policy loc_pol = solveModel(p,75,10,0.01);
+
+		if(debug)
+		{
+			vector<string> pS = get<3>(loc_pol);
+			vector<string> pA = get<1>(loc_pol);
+			vector<string> pZ = get<2>(loc_pol);
+			vector<string> pAS = get<4>(loc_pol);
+			cout << ">> POLICY COMPONENTS"  << endl;
+			cout << "S: \n\t";
+			for(unsigned int j = 0; j < pS.size(); j++) cout << pS[j] + " ";
+			cout << endl;
+			cout << "A: \n\t";
+			for(unsigned int j = 0; j < pA.size(); j++) cout << pA[j] + " ";
+			cout << endl;
+			cout << "Z: \n\t";
+			for(unsigned int j = 0; j < pZ.size(); j++) cout << pZ[j] + " ";
+			cout << endl;
+			cout << "Abs. S: \n\t";
+			for(unsigned int j = 0; j < pAS.size(); j++) cout << pAS[j] + " ";
+			cout << endl;
+			cout << "-------------------------------------------------" << endl;
+		}
+
+		//-----------------------------
+		//Save the local policy
+		h_pol.push_back(loc_pol);
+	}
+
+	//Store the hierarchical policy in the class' global variable
+	HP_ = h_pol;
+
+	//Initialize the JSON that will record the policy's execution
+	xrec_ = json({});
+	xrec_["goal_state"] = gs;// Name of the goal state
+
+	return true;
+}
+
+string HPomdp::execPA(string const &a,int const &lp_id,int const &max_steps,bool const &debug)
+{
+	//----------------------------------------------------
+	//Determine the case of execution
+	int exe_case;
+	vector<string>::iterator ite;
+	map<string,policy>::iterator ite2 = AA_.find(a);
+	if(ite2 != AA_.end())
+	{
+		//An action will be executed
+		ite = find(A_[0].begin(),A_[0].end(),a);
+		if(ite != A_[0].end())
+		{
+			//An concrete action will be executed
+			exe_case = 0;
+		}
+		else
+		{
+			//An abstract action will be executed
+			exe_case = 1;
+		}
+	}
+	else
+	{
+		if(lp_id >= 0 && lp_id < HP_.size())
+		{
+			//A local policy will be executed
+			exe_case = 2;
+		}
+		else
+		{
+			cout << ">> Error[execPA]: '" + a + "' is an invalid action and " << lp_id << " an invalid index for a local policy (HP_.size() is " << HP_.size() << ")." << endl;
+			return string("");
+		}
+	}
+
+	//----------------------------------------------------
+	//Execute the concrete action if that is the case
+	if(exe_case == 0)
+	{
+		//Record concrete action
+		json xt_a;
+		xt_a["type"] = string("a");
+		xt_a["name"] = string(a);
+		xt_a["lvl"] = A_.size() - 1;
+		xt_a["abs"] = false;
+		xrec_["data"].push_back(xt_a);
+
+		//Execute
+		string z = interactWithWorld(a);//Perform action
+		updateBeliefDyn(a,z);//Update the global belief vector
+		return z;
+	}
+
+	//----------------------------------------------------
+	//Get the policy to be executed (local or AA)
+	vector<string> tmp;
+	policy pol(POMDP::Policy(1,1,1),tmp,tmp,tmp,tmp,POMDP::Model<MDP::Model>(1,1,1,0.9));//empty policy tuple
+	if(exe_case == 1)//Get an abstract action
+		pol = AA_.at(a);
+	else if(exe_case == 2)//Get a local policy
+		pol = HP_[lp_id];
+
+	//----------------------------------------------------
+	//Policy execution
+	//Get the global-vector index at which the actions of the policy are
+	int gvi(-1);
+	int tdl(-1);
+	for(unsigned int i = 0; i < hs_.depth(); i++)
+	{
+		vector<string> tmp = hs_.keysAtLevel(i);
+		if(tmp.size() > 1)
+		{
+			tdl = i;
+			break;
+		}
+	}
+	if(exe_case == 1)
+	{
+		vector<string> pol_A = get<1>(pol);
+		string test_a;
+		for(unsigned int i = 0; i < pol_A.size(); i++)
+		{
+			if(pol_A[i] != "terminate")
+			{
+				test_a = pol_A[i];
+				break;
+			}
+		}
+		for(unsigned int i = 0; i < A_.size(); i++)
+		{
+			ite = find(A_[i].begin(),A_[i].end(),test_a);
+			if(ite != A_[i].end())
+			{
+				gvi = i;
+				break;
+			}
+		}
+	}
+	else if(exe_case == 2)
+	{
+		gvi = S_.size() - tdl - lp_id;
+	}
+
+	//Get operation level
+	int op_lvl = (exe_case == 1 ? (A_.size() - gvi - 1) : lp_id);
+
+	//Create the initial belief vector
+	vector<string> pol_S = get<3>(pol);
+	POMDP::Belief B(pol_S.size());
+	ite = find(pol_S.begin(),pol_S.end(),"extra");
+	int e_idx = distance(pol_S.begin(),ite);
+	bool has_extra(ite != pol_S.end());
+	for(unsigned int i = 0; i < pol_S.size(); i++) B(i) = 0.0;
+	for(map<string,double>::iterator it = B_[gvi].begin(); it != B_[gvi].end(); ++it)
+	{
+		ite = find(pol_S.begin(),pol_S.end(),it->first);
+		if(ite != pol_S.end())
+		{
+			//Assign prob to a known state
+			int idx = distance(pol_S.begin(),ite);
+			B(idx) = it->second;
+		}
+		//Unkown states' probs are added to the "extra" state
+		else B(e_idx) += it->second;
+	}
+
+	//Record aa and/or lp execution
+	json xt_p;
+	if(exe_case == 1)
+	{
+		// Record asbtract action
+		xt_p["type"] = string("a");
+		xt_p["abs"] = true;
+		xt_p["name"] = string(a);
+		xt_p["lvl"] = op_lvl - 1;
+	}
+	else
+	{
+		// Record local policy
+		xt_p["type"] = string("lp");
+		xt_p["lvl"] = op_lvl;
+	}
+	xt_p["ss"] = json::array();
+	for(map<string,double>::iterator it = B_[gvi].begin(); it != B_[gvi].end(); ++it)
+	{
+		ite = find(pol_S.begin(),pol_S.end(),it->first);
+		if(ite != pol_S.end()) xt_p["ss"].push_back(it->first);
+	}
+	xrec_["data"].push_back(xt_p);
+
+	//Record the initial belief
+	json xt_u,xt_b,xt_e;
+	xt_b["lvl"] = op_lvl;
+	xt_b["type"] = string("b");
+	xt_b["val"] = json::array();
+	for(unsigned int i = 0; i < pol_S.size(); i++)
+	{
+		if(B(i) == static_cast<double>(0.0)) continue;
+		json xt_tmp;
+		xt_tmp["s"] = pol_S[i];
+		xt_tmp["p"] = B(i);
+		xt_b["val"].push_back(xt_tmp);
+	}
+	xt_u["type"] = string("u");
+	xt_u["data"] = json::array();
+	xt_u["data"].push_back(xt_b);
+	xrec_["data"].push_back(xt_u);
+
+	//debug
+	int os = (S_.size() - tdl) - gvi;
+	string offset("");
+	for(int i = 0; i < os; i++)
+		offset += "\t";
+	if(debug)
+	{
+		cout << offset + "INIT-B: ";
+		for(unsigned int i = 0; i < pol_S.size(); i++)
+			cout << pol_S[i] + "(" << B(i) << ") ";
+		cout << endl;
+	}
+
+	//vector to monitor repeated abstract actions to detect if the system gets stuck
+	vector<string> deb;
+
+	//Compute the max-entropy for the extra state & get its index in the local S
+	int extra_idx = e_idx;
+	double max_se(0.0);
+	double non_mod_s(S_[gvi].size());
+	if(has_extra)
+	{
+		for(unsigned int i = 0; i < pol_S.size(); i++)
+		{
+			if(find(S_[gvi].begin(),S_[gvi].end(),pol_S[i]) != S_[gvi].end())
+				non_mod_s -= 1.0;
+		}
+		max_se = log2(1/non_mod_s) * (1/non_mod_s);
+		max_se *= (static_cast<double>(-1) * non_mod_s);
+	}
+
+	//Execution loop
+	vector<string> pol_A = get<1>(pol);
+	string last_action("");
+	POMDP::Policy p_pol = get<0>(pol);
+	POMDP::ValueFunction vf = p_pol.getValueFunction();
+	int horizon = p_pol.getH();
+	bool bl(false);
+	while(true)
+	{
+		for(int t = horizon; t >= 1; t--)
+		{
+			//Sample the next action
+			size_t action_idx;
+			tuple<size_t,size_t> a_id;
+			if(has_extra)
+			{
+				//The 'extra'-state's current entropy in the not-modeled region of S
+				vector<double> se_vec;
+				for(map<string,double>::iterator it = B_[gvi].begin(); it != B_[gvi].end(); ++it)
+				{
+					ite = find(pol_S.begin(),pol_S.end(),it->first);
+					if(ite == pol_S.end() && it->second > 0.0) se_vec.push_back(it->second);
+				}
+				double se = entropy(se_vec);
+
+				//The current entropy in the local state space
+				se_vec.clear();
+				for(unsigned int i = 0; i < pol_S.size(); i++)
+				{
+					if(pol_S[i] != "extra" && B(i) > 0.0)
+						se_vec.push_back(B(i));
+				}
+				double loc_se = entropy(se_vec);
+
+				//When there is an extra state, decide which selection criteria will be followed
+				//based on the entropy in the modeled and un-modeled state space regions
+				if(loc_se >= se)
+				{
+					//Get the action using the policy as interface
+					a_id = p_pol.sampleAction(B,t);
+					action_idx = get<0>(a_id);
+				}
+				else
+				{
+					//Get the action by accessing the value function
+					action_idx = localSampleAction(vf,B,t,extra_idx,se,max_se);
+				}
+			}
+			else
+			{
+				//Get the action using the policy as interface
+				a_id = p_pol.sampleAction(B,t);
+				action_idx = get<0>(a_id);
+			}
+
+			//Execute the action
+			string a = pol_A[action_idx];
+			string z;
+
+			//debug
+			if(gvi > 0)
+			{
+				//monitor only abstract actions
+				if(deb.size() == 0) deb.push_back(a);
+				else if(deb[deb.size()-1] == a) deb.push_back(a);
+				else if(deb[deb.size()-1] != a)
+				{
+					deb.clear();
+					deb.push_back(a);
+				}
+
+				//failure criteria
+				if(deb.size() > 10) stuck = true;
+
+				if(false)
+				{
+					//Write a file with info on the stuck policy
+					ofstream outf("STUCK-POL.txt");
+					outf << "S: ";
+					for(unsigned int i = 0; i < pol_S.size(); i++) outf << pol_S[i]+" ";
+					outf << endl;
+					outf << "A: ";
+					for(unsigned int i = 0; i < pol_A.size(); i++) outf << pol_A[i]+" ";
+					outf << endl;
+
+					for(unsigned int i = 0; i < pol_A.size(); i++)
+					{
+						int id = distance(A_[gvi].begin(),find(A_[gvi].begin(),A_[gvi].end(),pol_A[i]));
+						outf << "T-DIST: "+pol_A[i] << endl;
+						for(unsigned int j = 0; j < pol_S.size(); j++)
+						{
+							for(unsigned int k = 0; k < get<0>(T_[gvi][id]).size(); k++)
+							{
+							if(get<0>(T_[gvi][id])[k] == pol_S[j])
+								outf << "\t"+get<0>(T_[gvi][id])[k]+"->"+get<1>(T_[gvi][id])[k]+": "<< get<2>(T_[gvi][id])[k] << endl;
+							}
+							outf << "\t-----------------------" << endl;
+						}
+					}
+					outf.close();
+
+
+					cout << endl << "GOT STUCK!" << endl;
+					cin.get();
+				}
+			}
+
+			//debug: display action
+			if(debug)
+			{
+				if(gvi != 0)
+				{
+					cout << offset + a << endl;
+					cin.get();
+				}
+				else if(a != "terminate" && a != "help")
+					cout << offset + a + "-";
+			}
+
+			//Execute the action
+			if(a == "terminate" || a == "help")
+			{
+				//Record the action that ended the current policy
+				json xt_u,xt_end;
+				xt_u["type"] = string("u");
+				xt_u["data"] = json::array();
+				xt_end["lvl"] = op_lvl;
+				xt_end["type"] = string("end");
+				xt_end["val"] = string(a);
+				xt_u["data"].push_back(xt_end);
+				xrec_["data"].push_back(xt_u);
+
+				last_action = a;
+				bl = true;
+				break;
+			}
+			else z = execPA(a,-1,max_steps,debug);
+
+			//Verify if the amount of steps taken so far are within the allowed range
+			if(getStepCounter() > max_steps)
+			{
+				//Record the time-out event
+				json xt_u,xt_d;
+				xt_d["type"] = string("time-out");
+				xt_d["val"] = max_steps;
+				xt_u["type"] = string("u");
+				xt_u["data"] = json::array();
+				xt_u["data"].push_back(xt_d);
+				xrec_.push_back(xt_u);
+
+				return string("step-limit-reached:") + to_string(max_steps);
+			}
+
+			//Verify if the agent got stuck
+			if(stuck)
+			{
+				//Record the time-out event
+				json xt_u,xt_d;
+				xt_d["type"] = string("stuck");
+				xt_u["type"] = string("u");
+				xt_u["data"] = json::array();
+				xt_u["data"].push_back(xt_d);
+				xrec_.push_back(xt_u);
+
+				return string("stuck");
+			}
+
+			//debug: display observation for concrete actions
+			if(debug)
+			{
+				if(gvi == 0)
+				{
+					cout << z << endl;
+					cin.get();
+				}
+			}
+
+			//Update the local belief vector
+			for(unsigned int i = 0; i < pol_S.size(); i++) B(i) = 0.0;
+			for(map<string,double>::iterator it = B_[gvi].begin(); it != B_[gvi].end(); ++it)
+			{
+				ite = find(pol_S.begin(),pol_S.end(),it->first);
+				if(ite != pol_S.end())
+				{
+					//Assign prob to a known state
+					int idx = distance(pol_S.begin(),ite);
+					B(idx) = it->second;
+				}
+				//Unkown states' probs are added to the "extra" state
+				else B(e_idx) += it->second;
+			}
+
+			//Record update after action "a" has ended its execution: s, z, b, clra
+			json xt_u,xt_clra,xt_b;
+			xt_u["type"] = string("u");
+			xt_u["data"] = json::array();
+			if(gvi == 0)
+			{
+				//At concrete level update true-state and the perceived observation
+				json xt_cs,xt_cz;
+				xt_cs["lvl"] = op_lvl;
+				xt_cs["type"] = string("s");
+				xt_cs["val"] = string(ws_state);
+				xt_u["data"].push_back(xt_cs);
+				xt_cz["lvl"] = op_lvl;
+				xt_cz["type"] = string("z");
+				xt_cz["val"] = string(z);
+				xt_u["data"].push_back(xt_cz);
+			}
+			xt_clra["type"] = string("clra");
+			xt_clra["lvl"] = op_lvl;
+			xt_u["data"].push_back(xt_clra);
+			xt_b["type"] = string("b");
+			xt_b["lvl"] = op_lvl;
+			xt_b["val"] = json::array();
+			for(unsigned int i = 0; i < pol_S.size(); i++)
+			{
+				if(B(i) == static_cast<double>(0.0)) continue;
+				json xt_tmp;
+				xt_tmp["s"] = pol_S[i];
+				xt_tmp["p"] = B(i);
+				xt_b["val"].push_back(xt_tmp);
+			}
+			xt_u["data"].push_back(xt_b);
+			xrec_["data"].push_back(xt_u);
+		}
+
+		if(bl) break;
+	}
+
+	//debug
+	if(debug)
+	{
+		cout << offset + "END-B: ";
+		for(unsigned int i = 0; i < pol_S.size(); i++)
+			cout << pol_S[i] + "(" << B(i) << ") ";
+		cout << endl;
+	}
+
+	//----------------------------------------------------
+	//Return final action of the policy ("terminate" or "help")
+	return last_action;
+}
+
+bool HPomdp::hPolExec(int const &max_steps,bool const &debug)
+{
+	//----------------------------------------------------------------------------
+	// EXECUTE H-POLICY
+	if(HP_.size() == 0)
+	{
+		cout << ">> Error[hPolExec]: There is no hierarchical policy." << endl;
+		return false;
+	}
+
+	//Set fields in the JSON that will record the policy's execution
+	xrec_["n_lvl"] = HP_.size();// No. of levels in the hierarchy
+	xrec_["data"] = json::array();// data array
+	//Update the initial state
+	json tmp,tmp2;
+	tmp["type"] = string("u");
+	tmp["data"] = json::array();
+	tmp2["lvl"] = HP_.size()-1;
+	tmp2["type"] = string("s");
+	tmp2["val"] = string(ws_state);
+	tmp["data"].push_back(tmp2);
+	xrec_["data"].push_back(tmp);
+
+	//Start the execution of the hierarchical policy in a top-down manner
+	for(int i = 0; i < HP_.size(); i++)
+	{
+		if(debug) cout << ">> START loc-pol(" << i << ")" << endl;
+
+		//Execute the i-th local policy
+		string last_a = execPA("",i,max_steps,debug);
+
+		if(debug)
+		{
+			cout << ">> END loc-pol(" << i << "), last-action: " + last_a << endl;
+			cout << "------------------------------------------" << endl;
+		}
+
+		//Determine the next policy to be executed
+		if(last_a == "help") i -= 2;// (i-1)-th will be next
+		else if(last_a == "terminate") continue;// (i+1)-th will be next
+		else if(last_a.rfind("step", 0) == 0) return false;
+		else if(last_a == "stuck") return false;
+	}
+
+	if(debug) cout << ">> Hierarchical policy done." << endl;
+
+	return true;
+}
+
+//Auxiliary methods for rendering ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+void HPomdp::vText(Mat &img, string text, cv::Point ori, Scalar color)
+{
+	Mat t_img(40,text.length()*20,CV_8UC3,Scalar(0,0,0));
+	putText(t_img,text,cv::Point(0,35),FONT_HERSHEY_SIMPLEX,1.0,Scalar(255,255,255),2);
+	for(int i = 0; i < t_img.rows; i++)
+	{
+		for(int j = 0; j < t_img.cols; j++)
+		{
+			if(t_img.at<Vec3b>(cv::Point(j,i))[0] > 0)
+			{
+				int tx = i + ori.x;
+				int ty = ori.y - 1 - j;
+				if(tx >= 0 && tx < img.cols && ty >= 0 && ty < img.rows)
+				{
+					img.at<Vec3b>(cv::Point(tx,ty))[0] = color[0];
+					img.at<Vec3b>(cv::Point(tx,ty))[1] = color[1];
+					img.at<Vec3b>(cv::Point(tx,ty))[2] = color[2];
+				}
+			}
+		}
+	}
+}
+
+void HPomdp::pBar(Mat &img, float p, cv::Point ori)
+{
+	//Draw the probability bar
+	int height(p * 200);
+	int width(40);
+	Rect rec(ori.x,ori.y-height,width,height);
+	rectangle(img,rec,Scalar(0,255,0),-1);
+
+	//Draw the probability value within the bar
+	string text = to_string(p);
+	vText(img,text,ori,Scalar(0,0,255));
+}
+
+void HPomdp::pDist(Mat &img, map<string,float> &dist, cv::Point ori)
+{
+	int x_offset(0);
+	for(map<string,float>::iterator it = dist.begin(); it != dist.end(); ++it)
+	{
+		cv::Point tmp(ori.x + x_offset,ori.y);
+		vText(img,it->first,tmp,Scalar(255,255,255));
+		tmp.y -= 100;
+		pBar(img,it->second,tmp);
+		x_offset += 40;
+	}
+}
+
+void HPomdp::colorState(Mat &img, string &s, json &data, TreeHandle &hs, bool draw_id, vector<Scalar> &cc)
+{
+	int dim(36);
+	vector<string> conc_s = hs.keysAtLevel(hs.depth()-1);
+	vector<string>::iterator ite = std::find(conc_s.begin(),conc_s.end(),s);
+	if(ite != conc_s.end())
+	{
+		//"s" is a concrete state
+		int cx = int(data[s]["cx"])-1;
+		int cy = int(data[s]["cy"])-1;
+		int lvl(cc.size()-1);
+		cv::Point p1(cx-dim/2,cy-dim/2);
+		cv::Point p2(cx+dim/2,cy+dim/2);
+		rectangle(img,p1,p2,cc[lvl],-1);
+		if(draw_id)
+			putText(img,s,cv::Point(p1.x,cy),FONT_HERSHEY_PLAIN,1.0,Scalar(0,0,0));
+	}
+	else
+	{
+		//"s" is an abstract state
+		for(unsigned int i = 0; i < conc_s.size(); i++)
+		{
+			int lvl = hs.ply(s) - 1;
+			if(hs.isAncestor(s,conc_s[i]))
+			{
+				int cx = int(data[conc_s[i]]["cx"])-1;
+				int cy = int(data[conc_s[i]]["cy"])-1;
+				cv::Point p1(cx-dim/2,cy-dim/2);
+				cv::Point p2(cx+dim/2,cy+dim/2);
+				rectangle(img,p1,p2,cc[lvl],-1);
+				if(draw_id)
+					putText(img,conc_s[i],cv::Point(p1.x,cy),FONT_HERSHEY_PLAIN,1.0,Scalar(0,0,0));
+			}
+		}
+	}
+}
+
+std::vector<cv::Mat> HPomdp::animAction(Mat const &img, string a, json &data, cv::Point lvl_offset, string s0)
+{
+	vector<Mat> frames;
+	string arrow("->");
+	size_t arr_index = a.find(arrow);
+
+	//Define colors
+	Scalar start_c(255,0,0);
+	Scalar end_c(0,255,0);
+	Scalar text_c(255,255,255);
+	Scalar arrow_c(0,0,255);
+
+	//Action name origin point
+	cv::Point at_pt(lvl_offset.x+115,lvl_offset.y-320);
+
+	//"a" is an abstract action
+	if(arr_index != string::npos)
+	{
+		vector<string> tkn = splitStr(a,arrow);
+		string start_s(tkn[0]);
+		string end_s(tkn[1]);
+
+		//Get the coords of the start & end abstract states
+		int s_u(data[start_s]["u"]);
+		int s_d(data[start_s]["d"]);
+		int s_l(data[start_s]["l"]);
+		int s_r(data[start_s]["r"]);
+		int s_cx(data[start_s]["cx"]);
+		int s_cy(data[start_s]["cy"]);
+		int e_u(data[end_s]["u"]);
+		int e_d(data[end_s]["d"]);
+		int e_l(data[end_s]["l"]);
+		int e_r(data[end_s]["r"]);
+		int e_cx(data[end_s]["cx"]);
+		int e_cy(data[end_s]["cy"]);
+		cv::Point s_p1(s_l,s_u);
+		cv::Point s_p2(s_r,s_d);
+		cv::Point s_pt(s_cx,s_cy);
+		cv::Point s_ptt((s_cx+s_l)/2,s_cy);
+		cv::Point e_p1(e_l,e_u);
+		cv::Point e_p2(e_r,e_d);
+		cv::Point e_pt(e_cx,e_cy);
+		cv::Point e_ptt((e_cx+e_l)/2,e_cy);
+
+		//Render the frames
+		Mat f1 = img.clone();
+		putText(f1,a,at_pt,FONT_HERSHEY_SIMPLEX,1.0,text_c,2);
+		rectangle(f1,s_p1,s_p2,start_c,-1);
+		putText(f1,start_s,s_ptt,FONT_HERSHEY_SIMPLEX,1.0,text_c,2);
+		Mat f2 = img.clone();
+		putText(f2,a,at_pt,FONT_HERSHEY_SIMPLEX,1.0,text_c,2);
+		rectangle(f2,s_p1,s_p2,start_c,-1);
+		arrowedLine(f2,s_pt,e_pt,arrow_c,3);
+		putText(f2,start_s,s_ptt,FONT_HERSHEY_SIMPLEX,1.0,text_c,2);
+		Mat f3 = img.clone();
+		putText(f3,a,at_pt,FONT_HERSHEY_SIMPLEX,1.0,text_c,2);
+		rectangle(f3,s_p1,s_p2,start_c,-1);
+		rectangle(f3,e_p1,e_p2,end_c,-1);
+		arrowedLine(f3,s_pt,e_pt,arrow_c,3);
+		putText(f3,start_s,s_ptt,FONT_HERSHEY_SIMPLEX,1.0,text_c,2);
+		putText(f3,end_s,e_ptt,FONT_HERSHEY_SIMPLEX,1.0,text_c,2);
+
+		frames.push_back(f1);
+		frames.push_back(f2);
+		frames.push_back(f3);
+	}
+	//"a" is a concrete action
+	else
+	{
+		int dim(40);
+		int cx(data[s0]["cx"]);
+		int cy(data[s0]["cy"]);
+		cv::Point p1(cx,cy);
+		cv::Point p2;
+		if(a == "up") p2 = cv::Point(p1.x,p1.y-dim);
+		else if(a == "down") p2 = cv::Point(p1.x,p1.y+dim);
+		else if(a == "left") p2 = cv::Point(p1.x-dim,p1.y);
+		else if(a == "right") p2 = cv::Point(p1.x+dim,p1.y);
+
+		//Render the frame
+		Mat f1 = img.clone();
+		putText(f1,a,at_pt,FONT_HERSHEY_SIMPLEX,1.0,text_c,2);
+		arrowedLine(f1,p1,p2,arrow_c,2,8,0,0.3);
+
+		frames.push_back(f1);
+	}
+
+	return frames;
+}
+
+void HPomdp::animLP(Mat &img, vector<string> ss, string gs, json &data, cv::Point lvl_offset)
+{
+	//To compute centroids
+	int s_x(0);
+	int s_y(0);
+	int count(0);
+
+	//Color the non-goal states
+	for(unsigned int i = 0; i < ss.size(); i++)
+	{
+		int u(data[ss[i]]["u"]);
+		int d(data[ss[i]]["d"]);
+		int l(data[ss[i]]["l"]);
+		int r(data[ss[i]]["r"]);
+		cv::Point p1(l,u);
+		cv::Point p2(r,d);
+		rectangle(img,p1,p2,Scalar(255,0,0),-1);
+
+		//Sum to later compute the centroid of this state space
+		int cx(data[ss[i]]["cx"]);
+		int cy(data[ss[i]]["cy"]);
+		s_x += cx;
+		s_y += cy;
+		count++;
+	}
+
+	//Compute the centroid
+	int cent_x = s_x / count;
+	int cent_y = s_y / count;
+	cv::Point p_cent(cent_x,cent_y);
+
+	//Color the goal state
+	int u(data[gs]["u"]);
+	int d(data[gs]["d"]);
+	int l(data[gs]["l"]);
+	int r(data[gs]["r"]);
+	cv::Point p1(l,u);
+	cv::Point p2(r,d);
+	rectangle(img,p1,p2,Scalar(0,255,0),-1);
+
+	//Draw signal indicating the goal state
+	int cx(data[gs]["cx"]);
+	int cy(data[gs]["cy"]);
+	cv::Point p_gs(cx,cy);
+	arrowedLine(img,p_cent,p_gs,Scalar(0,0,255),2,8,0,0.2);
+	putText(img,string("Goal state"),p_cent,FONT_HERSHEY_PLAIN,1.4,Scalar(0,0,0),2);
+
+	//Draw the name of the LP
+	cv::Point p_lp_name(lvl_offset.x,lvl_offset.y-360);
+	putText(img,string("LP present"),p_lp_name,FONT_HERSHEY_SIMPLEX,1.0,Scalar(255,255,200),2);
+}
+
+Mat HPomdp::renderTemp(Mat const &img, vector<cv::Point> const &offset, int img_width)
+{
+	int l_offset = 40;
+	Mat tmp(img.rows+440,img_width,CV_8UC3,Scalar(0,0,0));
+	img.copyTo(tmp(Rect(0,0,img.cols,img.rows)));
+	for(unsigned int i = 0; i < offset.size(); i++)
+	{
+		putText(tmp,string("Level ")+to_string(i),cv::Point(offset[i].x,img.rows+l_offset),FONT_HERSHEY_SIMPLEX,1.0,Scalar(255,0,0),2);
+		putText(tmp,string("Action:"),cv::Point(offset[i].x,img.rows+3*l_offset),FONT_HERSHEY_SIMPLEX,1.0,Scalar(255,0,0),2);
+
+		if(i > 0) line(tmp,cv::Point(offset[i].x,img.rows),cv::Point(offset[i].x,tmp.rows),Scalar(255,255,255),2);
+	}
+	line(tmp,cv::Point(0,img.rows),cv::Point(tmp.cols-1,img.rows),Scalar(255,255,255),2);
+	line(tmp,cv::Point(0,img.rows+140),cv::Point(tmp.cols-1,img.rows+140),Scalar(255,255,255),2);
+
+	return tmp;
+}
+
+void HPomdp::drawSZ(Mat &img, string sz, bool is_s, json &data)
+{
+	int cx(data[sz]["cx"]);
+	int cy(data[sz]["cy"]);
+
+	cv::Point rp(cx,cy);
+	cv::Point tp(cx-10,cy+10);
+	string label = (is_s ? "R" : "O");
+	Scalar color = (is_s ? Scalar(0,128,255) : Scalar(0,255,0));
+	if(is_s)
+	{
+		circle(img,rp,17,color,-1);
+		putText(img,label,tp,FONT_HERSHEY_PLAIN,1.7,Scalar(255,255,255),2);
+	}
+	else circle(img,rp,17,color,2);
+}
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+bool HPomdp::saveExecutionHistory(string const &work_dir)
+{
+	//Save the execution history in a JSON file
+	ofstream json_writer;
+	json_writer.open(work_dir+"/execution_history.json");
+	if(!json_writer.is_open()) return false;
+	json_writer << xrec_.dump(int(4));
+	json_writer.close();
+
+	return true;
+}
+
+bool HPomdp::renderExecutionHistory(string const &work_dir)
+{
+	//Load the JSON files
+	ifstream x_file, c_file, e_file;
+	x_file.open(work_dir+"/execution_history.json");
+	c_file.open(work_dir+"/cell_coord.json");
+	e_file.open(work_dir+"/env.json");
+	if(!x_file.is_open())
+	{
+		cout << ">> execution_history.json is missing in the working directory "+work_dir << endl;
+		return false;
+	}
+	if(!c_file.is_open())
+	{
+		cout << ">> cell_coord.json is missing in the working directory "+work_dir << endl;
+		return false;
+	}
+	if(!e_file.is_open())
+	{
+		cout << ">> env.json is missing in the working directory "+work_dir << endl;
+		return false;
+	}
+	e_file.close();
+
+	//Build the hierarchy of states
+	TreeHandle hs;
+	hs.navFromJson(work_dir+"/env.json");
+
+	//Instantiate the exe-history and cells JSON objects
+	json x_j, c_j;
+	x_file >> x_j;
+	c_file >> c_j;
+	x_file.close();
+	c_file.close();
+
+	//Get the centroid and borders of every cell
+	json c_data;
+	int half_dim = int(c_j["cell_dim"]) / 2;
+	for(unsigned int i = 0; i < c_j["data"].size(); i++)
+	{
+		json tmp;
+		tmp["cx"] = int(c_j["data"][i]["x"]);
+		tmp["cy"] = int(c_j["data"][i]["y"]);
+		tmp["u"] = int(tmp["cy"]) - half_dim;
+		tmp["d"] = int(tmp["cy"]) + half_dim;
+		tmp["l"] = int(tmp["cx"]) - half_dim;
+		tmp["r"] = int(tmp["cx"]) + half_dim;
+		c_data[string(c_j["data"][i]["id"])] = tmp;
+	}
+	//Get the centroid and borders of every abstract state
+	for(int i = hs.depth()-2; i > 0 ; i--)
+	{
+		vector<string> tmp = hs.keysAtLevel(i);
+		for(unsigned int j = 0; j < tmp.size(); j++)
+		{
+			vector<string> chi = hs.keysOfChildren(tmp[j]);
+			int u,d,l,r;
+			for(unsigned int k = 0; k < chi.size(); k++)
+			{
+				if(k == 0)
+				{
+					u = c_data[chi[k]]["u"];
+					d = c_data[chi[k]]["d"];
+					l = c_data[chi[k]]["l"];
+					r = c_data[chi[k]]["r"];
+				}
+				else
+				{
+					if(c_data[chi[k]]["u"] < u) u = c_data[chi[k]]["u"];
+					if(c_data[chi[k]]["d"] > d) d = c_data[chi[k]]["d"];
+					if(c_data[chi[k]]["l"] < l) l = c_data[chi[k]]["l"];
+					if(c_data[chi[k]]["r"] > r) r = c_data[chi[k]]["r"];
+				}
+			}
+
+			json jtmp;
+			jtmp["cx"] = (l + r) / 2;
+			jtmp["cy"] = (u + d) / 2;
+			jtmp["u"] = u;
+			jtmp["d"] = d;
+			jtmp["l"] = l;
+			jtmp["r"] = r;
+			c_data[tmp[j]] = jtmp;
+		}
+	}
+
+	//Load the environment original image
+	Mat env_img = imread(work_dir+"/env.jpg");
+
+	//State variables for the render loop
+	string gs(x_j["goal_state"]);
+	vector<string> h_gs = hs.hieState(gs);
+	h_gs.erase(h_gs.begin());
+	int n_lvl(x_j["n_lvl"]);
+	string s("");
+	string z("");
+	vector< map<string,float> > b(n_lvl,map<string,float>());
+	vector<string> a(n_lvl,string(""));
+	vector< vector<string> > ss(n_lvl,vector<string>());
+	int lp_lvl(-1);
+	int aa_lvl(-1);
+
+	//Get the b-dist-max-length of each level
+	vector<unsigned int> bml(n_lvl,0);
+	vector<cv::Point> offset;
+	int img_width(0);
+	for(unsigned int i = 0; i < x_j["data"].size(); i++)
+	{
+		json tmp = x_j["data"][i];
+		if(string(tmp["type"]) == "u")
+		{
+			for(unsigned int j = 0; j < tmp["data"].size(); j++)
+			{
+				if(string(tmp["data"][j]["type"]) == "b")
+				{
+					int tmp_lvl(tmp["data"][j]["lvl"]);
+					unsigned int b_len(tmp["data"][j]["val"].size());
+					if(b_len > bml[tmp_lvl]) bml[tmp_lvl] = b_len;
+
+					break;
+				}
+			}
+		}
+	}
+	//Multiply the b-dist-max-length of each level x 40 (pixels)
+	for(unsigned int i = 0; i < bml.size(); i++) bml[i] *= 40;
+	//Build the offset points of each level
+	for(unsigned int i = 0; i < bml.size(); i++)
+	{
+		if(i == 0) offset.push_back(cv::Point(0,env_img.rows+440));
+		else
+		{
+			int x_max = max(bml[i-1],static_cast<unsigned int>(350));
+			offset.push_back(cv::Point(offset[i-1].x + x_max,env_img.rows+440));
+		}
+
+		if(i == bml.size()-1)
+		{
+			int last_width = max(bml[i],static_cast<unsigned int>(350));
+			img_width = offset[i].x + last_width;
+			img_width = max(img_width,env_img.cols);
+		}
+	}
+
+	//Vector of colors for states at different levels of the hierarchy
+	vector<Scalar> cc;
+	cc.push_back(Scalar(153,153,255));
+	cc.push_back(Scalar(153,255,204));
+	cc.push_back(Scalar(255,255,153));
+	cc.push_back(Scalar(255,153,153));
+
+
+	//Render the execution history
+	bool pause(false);
+	for(unsigned int i = 0; i < x_j["data"].size(); i++)
+	{
+		//Update state variables
+		json tmp = x_j["data"][i];
+
+		if(string(tmp["type"]) == "lp")
+		{
+			lp_lvl = tmp["lvl"];
+			for(int j = 0; j < n_lvl; j++)
+			{
+				b[j].clear();
+				a[j] = "";
+				ss[j].clear();
+			}
+			for(unsigned int j = 0; j < tmp["ss"].size(); j++)
+				ss[lp_lvl].push_back(string(tmp["ss"][j]));
+		}
+		else if(string(tmp["type"]) == "a")
+		{
+			int a_lvl = tmp["lvl"];
+			aa_lvl = a_lvl;
+			a[a_lvl] = string(tmp["name"]);
+			if(bool(tmp["abs"]))
+			{
+				ss[a_lvl+1].clear();
+				for(unsigned int j = 0; j < tmp["ss"].size(); j++)
+					ss[a_lvl+1].push_back(string(tmp["ss"][j]));
+			}
+		}
+		else if(string(tmp["type"]) == "u")
+		{
+			for(unsigned int j = 0; j < tmp["data"].size(); j++)
+			{
+				if(string(tmp["data"][j]["type"]) == "s") s = string(tmp["data"][j]["val"]);
+				else if(string(tmp["data"][j]["type"]) == "z") z = string(tmp["data"][j]["val"]);
+				else if(string(tmp["data"][j]["type"]) == "clra")
+				{
+					int a_lvl(tmp["data"][j]["lvl"]);
+					a[a_lvl] = "";
+					if(a_lvl < (n_lvl-1))
+					{
+						b[a_lvl+1].clear();
+						ss[a_lvl+1].clear();
+					}
+				}
+				else if(string(tmp["data"][j]["type"]) == "b")
+				{
+					int b_lvl(tmp["data"][j]["lvl"]);
+					b[b_lvl].clear();
+					for(unsigned int k = 0; k < tmp["data"][j]["val"].size(); k++)
+					{
+						string tmp_s(tmp["data"][j]["val"][k]["s"]);
+						float  tmp_p;
+						try
+						{
+							float  tmp_pp(tmp["data"][j]["val"][k]["p"]);
+							tmp_p = tmp_pp;
+						}
+						catch(int exception)
+						{
+							tmp_p = 0.0;
+						}
+						b[b_lvl][tmp_s] = tmp_p;
+					}
+				}
+			}
+		}
+
+		//+++++++++++++++++++++++++++++++++++++++++++++++++++++++
+		//Render
+		Mat img = renderTemp(env_img,offset,img_width);
+
+		//Draw LP & action text
+		for(unsigned int j = 0; j < a.size(); j++)
+		{
+			cv::Point text_p(offset[j].x + 115,offset[j].y - 320);
+			putText(img,a[j],text_p,FONT_HERSHEY_SIMPLEX,1.0,Scalar(255,255,255),2);
+			if(static_cast<int>(j) == lp_lvl) 
+				putText(img,string("LP present"),cv::Point(offset[j].x,offset[j].y - 360),FONT_HERSHEY_SIMPLEX,1.0,Scalar(255,255,200),2);
+		}
+
+
+		//Color state spaces
+		for(unsigned int j = 0; j < ss.size(); j++)
+		{
+			for(unsigned int k = 0; k < ss[j].size(); k++)
+			{
+				char c0 = ss[j][k][0];
+				if(c0 != 'c' && c0 != 's' && c0 != 'r' && c0 != 'b') continue;
+				colorState(img,ss[j][k],c_data,hs,true,cc);
+			}
+		}
+
+		//Draw state and observation
+		if(s != "") drawSZ(img,s,true,c_data);
+		if(z != "")
+		{
+			drawSZ(img,z,false,c_data);
+			z = "";
+		}
+
+		//Draw belief vectors
+		for(unsigned int j = 0; j < b.size(); j++) pDist(img,b[j],offset[j]);
+
+		//Draw LP
+		vector<Mat> frames;
+		if(string(tmp["type"]) == "lp")
+		{
+			animLP(img,ss[lp_lvl],h_gs[lp_lvl],c_data,offset[lp_lvl]);
+			frames.push_back(img);
+		}
+		//Draw action
+		else if(string(tmp["type"]) == "a")
+			frames = animAction(img,a[aa_lvl],c_data,offset[aa_lvl],s);
+		else frames.push_back(img);
+
+		//Display / record
+		for(unsigned int j = 0; j < frames.size(); j++)
+		{
+			imshow("Execution",frames[j]);
+			int delay = (pause ? 0 : 1500);
+			int ks = waitKey(delay);
+			if(ks == 32) pause = !pause;
+		}
+	}
+
+	return true;
+}
+
+bool HPomdp::run_eir(int argc,char** argv)
+{
+	if(argc < 7)
+	{
+		//Parameters used in experiments reported in the forst commit of the 'ThesisExperiments' repo
+		cout << "Usage: ./debug <# buildings> <std-dev> <building-dim> <room-dim> <subsection-dim> <# run sim.> <results dir.>" << endl;
+		return false;
+	}
+
+	//Get experimental configuration parameters
+	unsigned n_building	= stoi(string(argv[1]));
+	double std_dev		= stod(string(argv[2]));
+	unsigned build_dim	= stoi(string(argv[3]));
+	unsigned room_dim	= stoi(string(argv[4]));
+	unsigned subsec_dim	= stoi(string(argv[5]));
+	unsigned n_run		= 1;
+	string res_dir		= string(argv[6]);
+	string control_var	= "--";
+	double control_val	= 0.0;
+	unsigned kernel_dim	= 3;
+	double room_conn_ratio	= 0.5;
+	unsigned b_dim		= build_dim;
+	unsigned r_dim		= room_dim;
+	unsigned s_dim		= subsec_dim;
+	unsigned h_dim_w	= 2;
+	unsigned h_dim_h	= 1;
+	unsigned hall_flag	= EnvGen::DONT_USE_HALLS;
+	double T_prec		= 0.90;
+	int n_sim_aa		= 100;
+
+	//----------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------
+	//INITIAL EXPERIMENT SETTING
+
+	//Generate the output file directory and create it
+	string hp_dir(res_dir+"/H-POMDP");
+	shellCmd("mkdir "+res_dir);
+	shellCmd("mkdir "+hp_dir);
+
+	//Generate the evaluation environment
+	json egj;
+	egj["n_b"] = n_building;
+	egj["hall_flag"] = hall_flag;
+	egj["use_hall_prob"] = 0.5;
+	egj["room_conn_ratio"] = room_conn_ratio;
+	egj["cell_pixel_dim"] = 40;
+	egj["b_dims"] = json::array();
+	egj["h_dims"] = json::array();
+	egj["r_dims"] = json::array();
+	egj["s_dims"] = json::array();
+	for(unsigned int i = 0; i < 4; i++)
+	{
+		if(i < 2) egj["h_dims"].push_back(h_dim_w);
+		else egj["h_dims"].push_back(h_dim_h);
+		egj["b_dims"].push_back(b_dim);
+		egj["r_dims"].push_back(r_dim);
+		egj["s_dims"].push_back(s_dim);
+	}
+	ofstream file_writer(res_dir+"/config-env.json");
+	file_writer << egj.dump(4);
+	file_writer.close();
+	EnvGen eg(res_dir+"/config-env.json");
+	eg.generateEnv(res_dir+"/env.json",res_dir+"/env.jpg");
+
+	//Create the concrete probabilities file
+	double O_prec(0.10);
+	createProbFile(res_dir+"/prob.json",T_prec,O_prec,kernel_dim,std_dev);
+
+	//Load the environment & initialize the simulator
+	std::chrono::high_resolution_clock::time_point tmp_start = std::chrono::high_resolution_clock::now();
+	HPomdp hp(res_dir+"/env.json",res_dir+"/prob.json",n_sim_aa);
+	std::chrono::high_resolution_clock::time_point tmp_end = std::chrono::high_resolution_clock::now();
+	hp.setSimulatorModel();
+
+	//Initial planning time for H-POMDP
+	double init_p_time = u2s(tmp_start,tmp_end);
+
+	//Load the environment in separate TH & NH to determine sub-region paths
+	TreeHandle th;
+	Neighborhood nh;
+	bool r1 = th.navFromJson(res_dir+"/env.json");
+	bool r2 = nh.navFromJson(res_dir+"/env.json");
+	nh.propNeigNav(th);
+
+	//Generate the flat POMDP
+	pomdp p = hp.concModel();
+
+	//Get the list of cells from the extreme buildings for stratified sampling
+	vector<string> tmp_bui = th.keysAtLevel(1);
+	vector<string> bc1,bc2,both_bc;
+	for(unsigned int i = 0; i < tmp_bui.size(); i++)
+	{
+		bool res;
+		vector<string> tmp_n = nh.neigTo(tmp_bui[i],res);
+		if(tmp_n.size() == 1)
+		{
+			//Gather the cells of this extreme building
+			vector<string> tmp_r,tmp_c;
+			tmp_r = th.keysOfChildren(tmp_bui[i]);
+			for(unsigned int j = 0; j < tmp_r.size(); j++)
+			{
+				vector<string> tmp_s = th.keysOfChildren(tmp_r[j]);
+				for(unsigned int k = 0; k < tmp_s.size(); k++)
+				{
+					vector<string> tmp_cc = th.keysOfChildren(tmp_s[k]);
+					tmp_c.insert(tmp_c.end(),tmp_cc.begin(),tmp_cc.end());
+				}
+			}
+
+			//Save the cells
+			if(bc1.size() == 0) bc1 = tmp_c;
+			else bc2 = tmp_c;
+		}
+	}
+	both_bc = bc1;
+	both_bc.insert(both_bc.end(),bc2.begin(),bc2.end());
+
+	//Generate the pairs of init-goal states & their shortest path length
+	vector<string> init_s,goal_s;
+	vector<double> ig_len;
+	cout << "--------------------------------------" << endl;
+	cout << "GENERATING " << n_run << " INIT-GOAL PAIRS: ";
+	for(unsigned int i = 0; i < n_run; i++)
+	{
+		//The init-goal pairs are sampled in a stratified manner:
+		// - If the environment has only 1 building, random sampling is performed.
+		// - If there are at least 2 buildings, the init and goal states will belong to 
+		//   opposite extreme buildings. 
+		string r_s0;
+		string r_gs;
+		if(tmp_bui.size() >= 2)
+		{
+			r_s0 = both_bc[rand() % both_bc.size()];
+			auto ite = find(bc1.begin(),bc1.end(),r_s0);
+			if(ite == bc1.end()) r_gs = bc1[rand() % bc1.size()];
+			else r_gs = bc2[rand() % bc2.size()];
+		}
+		else
+		{
+			while(true)
+			{
+				r_s0 = get<1>(p)[rand() % get<1>(p).size()];
+				r_gs = get<1>(p)[rand() % get<1>(p).size()];
+				if(r_s0 != r_gs && r_s0 != "absb" && r_gs != "absb") break;
+			}
+		}
+
+		double opt_d = static_cast<double>(th.optPath(nh,r_s0,r_gs,false));
+
+		//Display that this pair has been created
+		if(i > 0) cout << ",";
+		cout << i+1;
+		cout.flush();
+
+		//Save the init-goal pair & its length
+		init_s.push_back(r_s0);
+		goal_s.push_back(r_gs);
+		ig_len.push_back(opt_d);
+	}
+	cout << endl;
+
+	//----------------------------------------------------------------------------------
+	//----------------------------------------------------------------------------------
+	//RUN SIMULATIONS
+	cout << "--------------------------------------" << endl;
+	cout << "# OF RUNS: " << init_s.size() << endl;
+	cout << "--------------------------------------" << endl;
+
+	//debug flag
+	bool debug(false);
+
+	//Vectors for storing the 'n_run' results
+	vector<double> success_vec;
+	vector<double> steps_vec;
+	vector<double> ratio_vec;
+	vector<double> rel_error_vec;
+	vector<double> error_vec;
+	vector<double> time_vec;
+
+	//++++++++++++++++++++++++++++++++++++++++++++++++
+	//Hierarchical POMDP
+
+	//Create file to save the results of each run
+	ofstream hp_res_file;
+	hp_res_file.open(hp_dir+"/sim_res.csv");
+	hp_res_file << "success,steps taken,path relative cost,relative error,absolute error,planning time,";
+	hp_res_file << "initial state,goal state,final state,shortest path length" << endl;
+	hp_res_file.close();
+
+	//Run
+	cout << "H-POMDP: ";
+	cout.flush();
+	int stuck_count(0);
+	for(unsigned int i = 0; i < init_s.size(); i++)
+	{
+		//Reset the simulator
+		hp.resetStepCounter();
+		hp.setSimulatorState(init_s[i]);
+
+		//Uncomment the line below so that the HP-agent starts its  task with a uniform belief distribution
+		//hp.uncertainS();
+
+		//Compute the hierarchical policy
+		tmp_start = std::chrono::high_resolution_clock::now();
+		bool p_status = hp.hPolPlan(goal_s[i],debug);
+		tmp_end = std::chrono::high_resolution_clock::now();
+
+		//Max amount of allowed concrete steps
+		int max_steps = hp.getSizeS(0);
+
+		//Execute the hierarchical policy
+		bool e_status = hp.hPolExec(max_steps,debug);
+
+		//Save & render execution
+		hp.saveExecutionHistory(res_dir);
+		hp.renderExecutionHistory(res_dir);
+
+		//Generate the i-th run result
+		string f_state = hp.getSimulatorState();
+		double f_success = ((f_state == goal_s[i]) ? 1.0 : 0.0);
+		double f_steps = hp.getStepCounter();
+		double f_ratio = f_steps / ig_len[i];
+		double f_error = th.optPath(nh,f_state,goal_s[i],false);
+		double p_time = u2s(tmp_start,tmp_end);
+		double rel_error = f_error / ig_len[i];
+
+		//Store results in vectors
+		success_vec.push_back(f_success);
+		steps_vec.push_back(f_steps);
+		ratio_vec.push_back(f_ratio);
+		error_vec.push_back(f_error);
+		time_vec.push_back(p_time);
+		rel_error_vec.push_back(rel_error);
+
+		//Save i-th run result in file
+		//success-steps-optratio-relerror-manerror-ptime-s_0-s_g-s_f-iglen
+		fstream fs;
+		fs.open(hp_dir+"/sim_res.csv",std::fstream::app);
+		fs << f_success << "," << f_steps << "," << f_ratio << "," << rel_error;
+		fs << "," << f_error << "," << p_time << "," << init_s[i] << "," << goal_s[i] << "," << f_state;
+		fs << "," << ig_len[i] << endl;
+		fs.close();
+
+		if(i > 0) cout << ",";
+		cout << i+1;
+		cout.flush();
+	}
+	cout << endl;
+
+	//Save summarize file
+	saveSummFile(success_vec,
+		     steps_vec,
+		     ratio_vec,
+		     error_vec,
+		     time_vec,
+		     rel_error_vec,
+		     ig_len,
+		     control_var,
+		     control_val,
+		     hp_dir+"/summarize_results.txt"
+		     );
+
+	//Add the initial planning time for Hie-POMDP
+	fstream hp_app;
+	hp_app.open(hp_dir+"/summarize_results.txt",std::fstream::app);
+	hp_app << "INIT PLANNING TIME:" << endl;
+	hp_app << init_p_time << endl;
+	hp_app.close();
+
+	return true;
+}
+
+
 

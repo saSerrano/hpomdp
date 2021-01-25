@@ -1,0 +1,26 @@
+INSTALLING AI-TOOLBOX
+-------------------------
+cd /home/eir2021/Documentos
+git clone https://github.com/Svalorzen/AI-Toolbox.git
+git reset --hard 8e0dcf90695eda77fa06f0499073388feb94d16d
+mkdir build
+cd build
+cmake -DMAKE_POMDP=1 ..
+make
+
+
+INSTALLING ST-TREE
+-------------------------
+cd /home/eir2021/Documentos
+git clone https://github.com/erikerlandson/st_tree.git
+
+
+COMPILING & RUNNING H-POMDP
+-------------------------
+cd /home/eir2021/Documentos/hpomdp
+mkdir build
+cd build
+cmake ..
+make
+cd ../bin
+bash run_eir.sh

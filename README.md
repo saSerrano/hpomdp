@@ -2,7 +2,7 @@
 
 This repository contains the implementation of the architecture presented in the article "Knowledge-Based Hierarchical POMDPs for Task Planning". This code implements the architecture initialization and operation stages. Also, only navigation environments can be generated (like the ones shown and evaluated in the article) with different dimensions, observation and transition probabilities.
 
-A preprint of "Knowledge-Based Hierarchical POMDPs for Task Planning" can be found [here](preprint.pdf).
+A preprint of "Knowledge-Based Hierarchical POMDPs for Task Planning" can be found [here](https://arxiv.org/abs/2103.10642).
 
 ## Requirements
 

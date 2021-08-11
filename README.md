@@ -4,7 +4,7 @@ This repository contains the implementation of the architecture presented in the
 
 ## Citation
 
-The published article of this project can be cited with the following bibtex entry:
+The [published article](https://link.springer.com/article/10.1007/s10846-021-01348-8) of this project can be cited with the following bibtex entry:
 
 ```
 @article{serrano2021knowledge,

@@ -2,7 +2,22 @@
 
 This repository contains the implementation of the architecture presented in the article "Knowledge-Based Hierarchical POMDPs for Task Planning". This code implements the architecture initialization and operation stages. Also, only navigation environments can be generated (like the ones shown and evaluated in the article) with different dimensions, observation and transition probabilities.
 
-A preprint of "Knowledge-Based Hierarchical POMDPs for Task Planning" can be found [here](https://arxiv.org/abs/2103.10642).
+## Citation
+
+The published article of this project can be cited with the following bibtex entry:
+
+```
+@article{serrano2021knowledge,
+  title={Knowledge-Based Hierarchical POMDPs for Task Planning},
+  author={Serrano, Sergio A and Santiago, Elizabeth and Martinez-Carranza, Jose and Morales, Eduardo F and Sucar, L Enrique},
+  journal={Journal of Intelligent \& Robotic Systems},
+  volume={101},
+  number={4},
+  pages={1--30},
+  year={2021},
+  publisher={Springer}
+}
+```
 
 ## Requirements
 
